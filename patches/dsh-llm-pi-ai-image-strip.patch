@@ -1,0 +1,71 @@
+diff --git a/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js b/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js
+index 784fe408b..791d6d39b 100644
+--- a/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js
+@@ -362,6 +362,46 @@ async function toPiContextWithImages(options, attachments) {
+ 	}
+ 	return piContext(options, messages);
+ }
++/**
++* Remove every image block (recursively, including inside tool-result
++* content) from a message list, keeping every other block. Used to degrade
++* gracefully when the active model cannot see images: the conversation keeps
++* its text, and only the provider request loses the pictures.
++* @param messages - the original (possibly deep-frozen) message list.
++* @returns a detached message list without image blocks.
++*/
++function stripImageBlocks(messages) {
++	const stripBlocks = (blocks) => {
++		let changed = false;
++		const out = [];
++		for (const block of blocks) {
++			if (block.type === "image") {
++				changed = true;
++				continue;
++			}
++			if (block.type === "tool-result") {
++				const content = stripBlocks(block.content);
++				if (content !== block.content) {
++					changed = true;
++					out.push({ ...block, content });
++				} else out.push(block);
++				continue;
++			}
++			out.push(block);
++		}
++		return changed ? out : blocks;
++	};
++	let changed = false;
++	const out = [];
++	for (const message of messages) {
++		const content = stripBlocks(message.content);
++		if (content !== message.content) {
++			changed = true;
++			out.push({ ...message, content });
++		} else out.push(message);
++	}
++	return changed ? out : messages;
++}
+ //#endregion
+ //#region lib/types/stream.js
+ /**
+@@ -823,11 +863,16 @@ var PiAiAdapter = class extends LlmAdapter {
+ 			const streamIdleTimeoutMs = profile.streamIdleTimeoutMs;
+ 			const watchdog = __addDisposableResource(env_1, idleWatchdog(upstream, streamIdleTimeoutMs, "LLM_STREAM_IDLE_TIMEOUT"), false);
+ 			try {
+-								const containsImage = options.messages.some((message) => contentHasImage(message.content));
+-				if (containsImage && !model.input.includes("image")) throw new LlmError(`pi-ai model "${model.id}" does not support image input`, "UNSUPPORTED_CONTENT");
++				let messages = options.messages;
++				let containsImage = messages.some((message) => contentHasImage(message.content));
++				if (containsImage && !model.input.includes("image")) {
++					console.warn(`[dsh-llm-pi-ai] model "${model.id}" does not support image input; dropping image blocks from this request instead of failing`);
++					messages = stripImageBlocks(messages);
++					containsImage = false;
++				}
+ 				const attachments = containsImage ? this.config.resolveAttachments?.() : void 0;
+ 				if (containsImage && attachments === void 0) throw new LlmError("pi-ai image input requires the durable attachment service", "UNSUPPORTED_CONTENT");
+-				const context = attachments === void 0 ? toPiContext(options) : await toPiContext(options, attachments);
++				const context = attachments === void 0 ? toPiContext({ ...options, messages }) : await toPiContext({ ...options, messages }, attachments);
+ 				const iterator = toStreamChunks(snapshot.models.streamSimple(model, context, {
+ 					...profileOptions(profile, reasoning, apiKey),
+ 					...options.temperature === void 0 ? {} : { temperature: options.temperature },
