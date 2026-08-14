@@ -2,9 +2,12 @@
   "name": "dsh-deveco-tool",
   "version": "0.1.0",
   "private": true,
-  "description": "Native DSH plugin: DevEco/HarmonyOS diagnostics tools extracted from deveco_tool MCP (repo: DreamLike/deveco_tool).",
+  "description": "Native DSH plugin: DevEco/HarmonyOS diagnostics tools.",
   "type": "module",
   "main": "src/plugin.mjs",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "smoke": "node --test --test-concurrency=1 smoke.test.mjs"
   },
