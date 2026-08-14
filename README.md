@@ -2,7 +2,7 @@
 
 HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件** 形式提供。
 
-本仓库从 [`deveco_tool`](https://gitcode.com/dream-ship/deveco_tool)（一个统一的 stdio MCP 网关）**提取**而来：29 个工具的业务逻辑全部复用，只把 MCP 协议层替换为 DSH 的插件注册层。**原项目未被改动**，仍可继续作为 MCP 服务器供其他 AI 宿主使用。
+29 个工具覆盖：设备调试、工程构建、ArkTS 静态检查、LSP 代码导航、UI 自动化、知识检索与文档校验。业务模块在 DSH 进程内直接加载，无中间协议层。
 
 ---
 
@@ -11,12 +11,12 @@ HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件**
 - [架构](#架构)
 - [快速开始](#快速开始)
 - [工具清单](#工具清单)
-- [与原 MCP 网关的关系](#与原-mcp-网关的关系)
 - [依赖](#依赖)
 - [开发与测试](#开发与测试)
 - [已知限制](#已知限制)
 - [Phase 2 增强规划](#phase-2-增强规划)
 - [目录结构](#目录结构)
+- [许可证](#许可证)
 
 ---
 
@@ -33,18 +33,17 @@ HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件**
 │   │  · 遍历 tools-defs.mjs 的 26 个本地工具定义, ctx.tools.register()      │   │
 │   │  · 注册 3 个 CodeGenie 代理工具(check_cpp_files / perform_ui_action /  │   │
 │   │    get_app_ui_tree), 调用经 callCodeGenieTool 转发                     │   │
-│   │  · dispatch(name, args) 按工具名分发到业务模块(对应原 server.mjs 的     │   │
-│   │    callTool 分支, 逐条等价)                                            │   │
+│   │  · dispatch(name, args) 按工具名分发到业务模块                          │   │
 │   │  · 卸载时清理 LSP / CodeGenie 子进程                                   │   │
 │   └──────────────┬───────────────────────────────────────────────────────┘   │
 │                  │ 直接函数调用(进程内, 无协议层)                             │
 │   ┌──────────────▼───────────────────────────────────────────────────────┐   │
-│   │ 业务模块(22 个, 从 deveco_tool 逐字提取, 零改动)                        │   │
+│   │ 业务模块(22 个)                                                        │   │
 │   │  arkts-check / deveco-cli / device-ui / hdc-log / lsp /              │   │
 │   │  codegenie-client / script-registry / document-validate /           │   │
 │   │  modules(auth, knowledge) / ...                                     │   │
 │   └──────────────┬───────────────────────────────────────────────────────┘   │
-│                  │ spawn(子进程, 与 MCP 版一致)                              │
+│                  │ spawn(子进程)                                            │
 │                  ▼                                                          │
 │         hdc / DevEco CLI / ArkTS LSP / CodeGenie child / python / node      │
 └──────────────────────────────────────────────────────────────────────────────┘
@@ -53,8 +52,8 @@ HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件**
 三层设计：
 
 1. **注册层**（`plugin.mjs`）：DSH 插件入口，只做工具注册与分发，不含业务逻辑。
-2. **schema 表**（`tools-defs.mjs`）：26 个本地工具的 `name / description / inputSchema`，用脚本从原 `server.mjs` 的 `localTools` 数组**逐字提取**，保证与 MCP 版 schema 完全一致（`deveco_script` 的 `enum: scriptIds` 依赖已同步注入）。
-3. **业务模块**（其余 22 个 `.mjs`）：与原项目逐字相同，唯一的内部改动是 `config.mjs` 的 `SKILLS_ROOT` 指向原项目 skills 目录、`script-registry.mjs` 的 `scriptPath()` 相应改用 `SKILLS_ROOT`（见 [与原 MCP 网关的关系](#与原-mcp-网关的关系)）。
+2. **schema 表**（`tools-defs.mjs`）：26 个本地工具的 `name / description / inputSchema` 静态定义（`deveco_script` 的 `enum` 脚本清单在模块加载时动态生成）。
+3. **业务模块**（其余 22 个 `.mjs`）：各领域实现——静态检查、构建、设备、UI、LSP、脚本调度、登录、知识检索等，通过 spawn 子进程（hdc / DevEco CLI / LSP / CodeGenie / python / node）完成实际工作。
 
 ---
 
@@ -72,7 +71,7 @@ npm install
 在 `~/.dsh/profiles/web/cordis.patch.yml` 追加（保存即热生效，无需重启 DSH）：
 
 ```yaml
-# 原生插件:deveco_tool 提取的 DSH 插件
+# 原生插件:devEco/HarmonyOS 诊断工具
 - insert:
     - id: dsh-deveco
       name: '/Users/dreamlike/DreamLike/dsh_deveco_tool/src/plugin.mjs'
@@ -86,7 +85,7 @@ dsh --profile web --dump-config   # 应包含 dsh-deveco 条目
 
 ### 3. 使用
 
-插件加载后，29 个工具以**原生工具名**（无前缀）出现在会话工具列表中，例如 `deveco_doctor`、`arkts_check`、`ui_snapshot`、`build_project`。
+插件加载后，29 个工具以原生工具名出现在会话工具列表中，例如 `deveco_doctor`、`arkts_check`、`ui_snapshot`、`build_project`。
 
 ### 4. 运行冒烟测试
 
@@ -167,31 +166,7 @@ npm run smoke
 | `perform_ui_action` | 统一 UI 操作（click / directionalFling / inputText / keyEvent / screenshot），经 CodeGenie child；未传 `hvd` 且仅一台设备时自动解析 |
 | `get_app_ui_tree` | 获取 UI 树（simple / full），经 CodeGenie child |
 
-> 工具列表合计 29 = 26 本地 + 3 CodeGenie 代理。CodeGenie 自带的 `verify_ui` / `save_ui_screenshot` / `get_ui_verification_log`（UI 自动校验链）与原 MCP 一致地**不注册**。
-
----
-
-## 与原 MCP 网关的关系
-
-### 提取方式
-
-- **逐字复制**：22 个业务模块 + `upstream/` 与原项目 `src/` 完全一致（本次提取时原项目工作区干净，`hilog -x → -z` 修复等历史改动均已随复制带入）。
-- **协议层替换**：原 `server.mjs`（MCP Server / StdioServerTransport / callTool 分发）不复制，改为 `plugin.mjs` 的 `ctx.tools.register()` 注册 + `dispatch()` 分发，逻辑逐条对应。
-- **schema 提取**：`tools-defs.mjs` 用脚本从原 `server.mjs` 的 `localTools` 数组提取，保证与 MCP 版完全一致。
-
-### 共享与引用
-
-| 资源 | 处理方式 |
-|---|---|
-| `skills/`（43M，19 个脚本 + 知识库） | **只读引用**：`config.mjs` 的 `SKILLS_ROOT = "/Users/dreamlike/DreamLike/deveco_tool/skills"`。原项目路径变更时需同步修改 |
-| 登录凭证 | 共享 `~/.deveco-knowledge-mcp/auth.json`，与 MCP 版登录态互通 |
-| 设备截图/锁 | `os.tmpdir()/deveco-ui/<device>/`，与 MCP 版共用（互斥锁保证不冲突） |
-| CodeGenie child | 各自进程独立 spawn（`REPO_ROOT/node_modules/@deveco-codegenie/mcp`），互不影响 |
-
-### 共存与切换
-
-- 工具名不冲突：MCP 桥接注册为 `mcp__deveco__*`，本插件注册为原名。
-- 过渡期可同时挂载两者；验证原生工具行为一致后，从 `cordis.patch.yml` 移除 `mcp-deveco` 条目即可完成切换（保存即生效）。
+> 工具列表合计 29 = 26 本地 + 3 CodeGenie 代理。CodeGenie 自带的 `verify_ui` / `save_ui_screenshot` / `get_ui_verification_log`（UI 自动校验链）不注册。
 
 ---
 
@@ -199,13 +174,13 @@ npm run smoke
 
 | 包 | 用途 |
 |---|---|
-| `@modelcontextprotocol/sdk` | 仅 `codegenie-client.mjs` 作为 **MCP client** 连接 CodeGenie child（并非服务端） |
+| `@modelcontextprotocol/sdk` | `codegenie-client.mjs` 作为 MCP client 连接 CodeGenie child（非服务端） |
 | `@arkts/language-server` | ArkTS LSP（`lsp.mjs`） |
-| `@deveco-codegenie/mcp` | CodeGenie child 入口（`codegenie-client.mjs` 按 `REPO_ROOT/node_modules` 解析） |
-| `@deveco/deveco-cli` | 构建/部署 CLI（`deveco-cli.mjs` 按 `REPO_ROOT` 解析） |
+| `@deveco-codegenie/mcp` | CodeGenie child 入口（按 `REPO_ROOT/node_modules` 解析） |
+| `@deveco/deveco-cli` | 构建/部署 CLI（按 `REPO_ROOT` 解析） |
 | `vscode-jsonrpc` / `vscode-languageserver-protocol` / `vscode-uri` | LSP 协议实现 |
 
-> 刻意**不依赖** `@deepseek-ai/dsh-tools`：注册使用纯对象 `ToolDefinition`（`dsh-mcp-client` 同款做法），规避 npm registry 版本与 DSH 内置版本不一致的风险。`overrides` 保留原项目的 `axios`/`adm-zip` 安全版本固定。
+> 注册使用纯对象 `ToolDefinition`（`ctx.tools.register` 直接接受），不依赖 `@deepseek-ai/dsh-tools` 包。`overrides` 固定 `axios`/`adm-zip` 的安全版本。
 
 ---
 
@@ -232,9 +207,9 @@ node --check src/*.mjs # 语法检查(全部模块)
 
 ## 已知限制
 
-- `SKILLS_ROOT` 硬编码原项目绝对路径；原 `deveco_tool` 仓库移动/改名后需同步修改 `src/config.mjs`。
-- 依赖 dev 环境：ArkTS LSP、DevEco CLI、hdc、CodeGenie child 均为本机 DevEco Studio 安装（`DEVECO_HOME` / `DEVECO_PATH` 自动探测，可用环境变量覆盖）。
-- Phase 1 输出呈现为 JSON 文本（与 MCP 版一致），未启用 DSH 卡片/图片内联。
+- `SKILLS_ROOT` 指向本机固定的外部 skills 目录（`/Users/dreamlike/DreamLike/deveco_tool/skills`，脚本与知识库所在处），该目录不可用时 `deveco_script` 系列会报 `SCRIPT_NOT_FOUND`。
+- 依赖 dev 环境：ArkTS LSP、DevEco CLI、hdc、CodeGenie child 均依赖本机 DevEco Studio 安装（`DEVECO_HOME` / `DEVECO_PATH` 自动探测，可用环境变量覆盖；macOS 默认路径为 `/Applications/DevEco-Studio.app/Contents`，其他平台需设置环境变量）。
+- Phase 1 输出呈现为 JSON 文本，未启用 DSH 卡片/图片内联。
 
 ---
 
@@ -254,10 +229,10 @@ dsh_deveco_tool/
 ├── package.json          # 依赖与脚本
 ├── smoke.test.mjs        # 冒烟测试(假 ctx 注册 + 抽样执行)
 ├── src/
-│   ├── plugin.mjs        # DSH 插件入口(注册层 + dispatch 分发)  [新写]
-│   ├── tools-defs.mjs    # 26 个本地工具 schema 表             [提取自 server.mjs]
-│   ├── config.mjs        # 路径/环境探测; SKILLS_ROOT 指向原项目  [1 处修改]
-│   ├── script-registry.mjs # 19 个 skill 脚本注册与执行          [路径改用 SKILLS_ROOT]
+│   ├── plugin.mjs        # DSH 插件入口(注册层 + dispatch 分发)
+│   ├── tools-defs.mjs    # 26 个本地工具 schema 定义表
+│   ├── config.mjs        # 路径/环境探测(DevEco home、hdc、skills 根)
+│   ├── script-registry.mjs # skill 脚本注册与执行
 │   ├── arkts-check.mjs / build-profile.mjs / codegenie-client.mjs /
 │   │   codegenie-tools.mjs / deveco-cli.mjs / device-dump.mjs /
 │   │   device-input.mjs / device-lock.mjs / device-tar.mjs /
@@ -267,7 +242,7 @@ dsh_deveco_tool/
 │   │   ├── auth.mjs      # DevEco 登录(凭证存 ~/.deveco-knowledge-mcp)
 │   │   ├── config.mjs    # 登录端点常量
 │   │   └── knowledge.mjs # CodeGenie 知识库检索
-│   └── upstream/         # 上游提取的检查器/文档(arkts-check.cjs 等)
+│   └── upstream/         # 检查器与配套文档(arkts-check.cjs 等)
 └── node_modules/         # 依赖(不入库)
 ```
 
@@ -275,4 +250,4 @@ dsh_deveco_tool/
 
 ## 许可证
 
-遵循原 `deveco_tool` 仓库的许可条款（业务模块逐字提取自该仓库，详见其 [LICENSE](https://gitcode.com/dream-ship/deveco_tool)）。
+业务模块的许可沿用其来源项目 `deveco_tool`（见 [LICENSE](https://gitcode.com/dream-ship/deveco_tool)）；本仓库其余内容保留所有权利。
