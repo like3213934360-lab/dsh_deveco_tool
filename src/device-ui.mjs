@@ -544,15 +544,17 @@ function captureReport({ deviceId, method, localPath, requestedPath, fallbackRea
     deviceId,
     method,
     localPath,
-    requestedPath: localPath === requestedPath ? undefined : requestedPath,
-    fallbackReason: fallbackReason ?? undefined,
+    // DSH 工具输出必须是无损 JSON: undefined 字段会被校验器拒绝
+    // ("value is not lossless JSON"),所以缺省字段用条件展开省略。
+    ...(localPath !== requestedPath ? { requestedPath } : {}),
+    ...(fallbackReason !== undefined && fallbackReason !== null ? { fallbackReason } : {}),
     mimeType: isPng ? "image/png" : "image/jpeg",
     bytes,
     width,
     height,
     nativeWidth: nativeSize?.width ?? null,
     nativeHeight: nativeSize?.height ?? null,
-    nativeSizeChanged: nativeSizeChanged || undefined,
+    ...(nativeSizeChanged ? { nativeSizeChanged } : {}),
     // Multiply a pixel read off this image by this to get device coordinates. Prefer the matches
     // from ui_observe or ui_find, which are device coordinates already and cannot be misscaled.
     coordinateScale: width && nativeSize?.width ? Number((nativeSize.width / width).toFixed(4)) : 1,
@@ -649,7 +651,7 @@ export async function uiSnapshot(input = {}) {
       outputSize, nativeSize, nativeSizeChanged, startedAt,
     }),
     frameSignature,
-    unchanged: unchanged || undefined,
+    ...(unchanged ? { unchanged } : {}),
   };
 }
 

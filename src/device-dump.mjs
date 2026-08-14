@@ -276,9 +276,10 @@ export function selectNodes({ nodes, screen }, selector) {
         y: Math.round((node.rect.y1 + node.rect.y2) / 2),
       },
       onScreen,
-      clickable: node.clickable ?? undefined,
-      enabled: node.enabled ?? undefined,
-      displayId: node.displayId ?? undefined,
+      // DSH 工具输出必须是无损 JSON: 缺省字段用条件展开省略,不能是 undefined。
+      ...(node.clickable !== undefined && node.clickable !== null ? { clickable: node.clickable } : {}),
+      ...(node.enabled !== undefined && node.enabled !== null ? { enabled: node.enabled } : {}),
+      ...(node.displayId !== undefined && node.displayId !== null ? { displayId: node.displayId } : {}),
     });
   }
   return { matches, matchCount };

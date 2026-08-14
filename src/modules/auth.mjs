@@ -375,7 +375,13 @@ export function authStatus() {
   } catch {
     sessionExpired = undefined;
   }
-  return { loggedIn: true, userName: auth.userName, userId: auth.userId, sessionExpired };
+  // DSH 工具输出必须是无损 JSON: sessionExpired 可能为 undefined,条件展开省略。
+  return {
+    loggedIn: true,
+    userName: auth.userName,
+    userId: auth.userId,
+    ...(sessionExpired !== undefined ? { sessionExpired } : {}),
+  };
 }
 
 /**

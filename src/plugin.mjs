@@ -216,7 +216,17 @@ const name = "dsh-deveco-tool";
 const inject = ["tools"];
 
 async function apply(ctx) {
-  const textOnlyTools = new Set(["build_project", "start_app"]);
+  // LSP 家族返回纯文本行(与 MCP 版一致),必须声明 textOnly,否则 DSH 按
+  // object 校验输出会报 "value must be an object"。
+  const textOnlyTools = new Set([
+    "build_project",
+    "start_app",
+    "find_references",
+    "go_to_definition",
+    "get_hover",
+    "list_symbols",
+    "find_call_hierarchy",
+  ]);
 
   for (const tool of localTools) {
     ctx.tools.register(defineTool(
