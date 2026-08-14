@@ -8,7 +8,6 @@ HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件**
 
 ## 目录
 
-- [背景与动机](#背景与动机)
 - [架构](#架构)
 - [快速开始](#快速开始)
 - [工具清单](#工具清单)
@@ -18,27 +17,6 @@ HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件**
 - [已知限制](#已知限制)
 - [Phase 2 增强规划](#phase-2-增强规划)
 - [目录结构](#目录结构)
-
----
-
-## 背景与动机
-
-`deveco_tool` 原本是一个 stdio MCP 服务器（`src/server.mjs` + 22 个业务模块），通过 DSH 的 `dsh-mcp-client` 插件桥接使用。桥接方案可行，但存在一些固有限制：
-
-| 方面 | MCP 桥接（原方案） | 原生插件（本仓库） |
-|---|---|---|
-| 工具命名 | `mcp__deveco__arkts_check`（带前缀、被规范化） | `arkts_check`（直接原名） |
-| 输出契约 | MCP 通用 schema，只做基础校验 | 每个工具声明规范输出 schema（`output.schema` + `render`） |
-| 取消/超时 | `toolCallTimeoutMs` 一刀切，服务器侧执行可能残留 | `execute(args, exec)` 收到 `exec.signal`，协作式取消端到端可达 |
-| 中间进程 | DSH ↔ MCP server 之间一层长驻进程 + JSON-RPC | 业务模块直接在 DSH 进程内加载，无中间进程 |
-| DSH 生态 | 只能作为普通 MCP 工具 | 可接入 `ctx.tools.guard()` 门禁、事件订阅、上下文注入等 |
-| 迭代 | 改代码需重启 MCP server 进程 | 改代码后触发配置 HMR 重载即可 |
-
-提取时遵循的原则：
-
-1. **原项目零改动**：`/Users/dreamlike/DreamLike/deveco_tool` 的任何文件都不修改，其 MCP 形态继续可用。
-2. **行为等价优先**：本插件的 Phase 1 与 MCP 版行为逐条对应（工具 schema 逐字提取、错误码、返回结构一致），增强能力放入 Phase 2。
-3. **大文件不复制**：43M 的 `skills/` 目录不复制，只读引用原项目路径。
 
 ---
 
