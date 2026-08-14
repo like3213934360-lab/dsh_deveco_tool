@@ -7,7 +7,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import plugin from "./src/plugin.mjs";
+import { apply } from "./src/plugin.mjs";
 
 function makeFakeCtx() {
   const registered = [];
@@ -30,7 +30,7 @@ function makeFakeCtx() {
 
 test("plugin registers all 29 tools", () => {
   const ctx = makeFakeCtx();
-  plugin(ctx);
+  apply(ctx);
   const names = ctx.registered.map((tool) => tool.name);
   assert.equal(names.length, 29);
   const expected = [
@@ -75,7 +75,7 @@ test("plugin registers all 29 tools", () => {
 
 test("deveco_script_catalog executes", async () => {
   const ctx = makeFakeCtx();
-  plugin(ctx);
+  apply(ctx);
   const tool = ctx.registered.find((item) => item.name === "deveco_script_catalog");
   const value = await tool.execute({}, { signal: new AbortController().signal });
   assert.ok(Array.isArray(value.scripts));
@@ -85,7 +85,7 @@ test("deveco_script_catalog executes", async () => {
 
 test("deveco_status executes", async () => {
   const ctx = makeFakeCtx();
-  plugin(ctx);
+  apply(ctx);
   const tool = ctx.registered.find((item) => item.name === "deveco_status");
   const value = await tool.execute({}, { signal: new AbortController().signal });
   assert.equal(typeof value.loggedIn, "boolean");
@@ -93,7 +93,7 @@ test("deveco_status executes", async () => {
 
 test("hdc_log list_devices executes", async () => {
   const ctx = makeFakeCtx();
-  plugin(ctx);
+  apply(ctx);
   const tool = ctx.registered.find((item) => item.name === "hdc_log");
   const value = await tool.execute(
     { action: "list_devices" },
@@ -105,6 +105,6 @@ test("hdc_log list_devices executes", async () => {
 
 test("dispose handler is registered", () => {
   const ctx = makeFakeCtx();
-  plugin(ctx);
+  apply(ctx);
   assert.equal(typeof ctx.events.dispose, "function");
 });

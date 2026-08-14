@@ -209,10 +209,13 @@ async function dispatch(name, args) {
 
 /**
  * DSH 插件入口:注册 26 个本地工具 + 3 个 CodeGenie 代理工具。
- *
- * @param ctx Cordis 上下文(tools 服务来自 dsh-tools)
+ * 以 cordis namespace 插件形式导出(name/inject/apply), inject 声明 tools 服务,
+ * 否则访问 ctx.tools 会抛 "cannot get property without inject"。
  */
-export default function dshDevecoToolPlugin(ctx) {
+const name = "dsh-deveco-tool";
+const inject = ["tools"];
+
+async function apply(ctx) {
   const textOnlyTools = new Set(["build_project", "start_app"]);
 
   for (const tool of localTools) {
@@ -255,3 +258,5 @@ export default function dshDevecoToolPlugin(ctx) {
     closeCodeGenie().catch(() => {});
   });
 }
+
+export { name, inject, apply };
