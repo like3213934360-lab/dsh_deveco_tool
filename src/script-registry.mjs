@@ -277,6 +277,19 @@ export async function runRegisteredScript(id, input = {}) {
     let stderr = "";
     let settled = false;
 
+    // Caller cancellation kills the whole group, same as a timeout.
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      terminateProcessTree(child);
+      resolve({ exitCode: null, signal: "SIGTERM", stdout, stderr });
+    };
+    if (input.signal) {
+      if (input.signal.aborted) onAbort();
+      else input.signal.addEventListener("abort", onAbort, { once: true });
+    }
+
     const timer = setTimeout(() => {
       terminateProcessTree(child);
       if (!settled) {

@@ -87,10 +87,10 @@ function commandText(entry, args) {
  * Run the DevEco CLI and capture its output.
  *
  * @param {string[]} args CLI arguments.
- * @param {{cwd: string, timeoutMs?: number}} options Working directory and timeout.
+ * @param {{cwd: string, timeoutMs?: number, signal?: AbortSignal}} options Working directory, timeout, and caller cancellation.
  * @returns {Promise<{command: string, exitCode: number|null, signal: string|null, stdout: string, stderr: string}>} Result.
  */
-export function runDevecoCli(args, { cwd, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+export function runDevecoCli(args, { cwd, timeoutMs = DEFAULT_TIMEOUT_MS, signal } = {}) {
   const entry = resolveDevecoCli();
   const bounded = Math.min(Math.max(Number(timeoutMs) || DEFAULT_TIMEOUT_MS, 1000), MAX_TIMEOUT_MS);
   return new Promise((resolve, reject) => {
@@ -107,6 +107,19 @@ export function runDevecoCli(args, { cwd, timeoutMs = DEFAULT_TIMEOUT_MS } = {})
     let stdout = "";
     let stderr = "";
     let settled = false;
+    // Caller cancellation takes the same whole-tree kill as a timeout: the CLI is detached into
+    // its own group, so signalling only the direct child would strand hvigor/ohpm grandchildren.
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      terminateProcessTree(child);
+      resolve({ command: commandText(entry, args), exitCode: null, signal: "SIGTERM", stdout, stderr });
+    };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
     const timer = setTimeout(() => {
       terminateProcessTree(child);
       if (!settled) {
@@ -222,7 +235,7 @@ function presentLog(fullText, logPath) {
  * equivalent, and `clean` here means clean *and then build* rather than
  * upstream's clean-only.
  *
- * @param {object} input Tool arguments.
+ * @param {object} input Tool arguments (may carry `signal` for caller cancellation).
  * @returns {Promise<string>} Human-readable build report.
  */
 export async function buildProject(input = {}) {
@@ -240,7 +253,7 @@ export async function buildProject(input = {}) {
   const transcript = [];
 
   if (input.clean) {
-    const cleaned = await runDevecoCli(["build", "clean"], { cwd: project, timeoutMs: input.timeoutMs });
+    const cleaned = await runDevecoCli(["build", "clean"], { cwd: project, timeoutMs: input.timeoutMs, signal: input.signal });
     transcript.push(`> ${cleaned.command}\n\n${combineOutput(cleaned)}`);
     const cleanFailure = devecoCliFailureMessage(cleaned);
     if (cleanFailure) {
@@ -252,7 +265,7 @@ export async function buildProject(input = {}) {
   }
 
   const args = buildArgs({ product: input.product, modules, build_mode: input.build_mode });
-  const result = await runDevecoCli(args, { cwd: project, timeoutMs: input.timeoutMs });
+  const result = await runDevecoCli(args, { cwd: project, timeoutMs: input.timeoutMs, signal: input.signal });
   transcript.push(`> ${result.command}\n\n${combineOutput(result)}`);
 
   const fullText = transcript.join("\n\n");
@@ -289,7 +302,7 @@ export async function buildProject(input = {}) {
 /**
  * Deploy and launch the already-built app on a connected device.
  *
- * @param {object} input Tool arguments.
+ * @param {object} input Tool arguments (may carry `signal` for caller cancellation).
  * @returns {Promise<string>} Human-readable launch report.
  */
 export async function startApp(input = {}) {
@@ -336,7 +349,7 @@ export async function startApp(input = {}) {
   const args = ["run", "--skip-build", "--device", device, "--module", ...selected];
   if (ability) args.push("--ability", ability);
 
-  const result = await runDevecoCli(args, { cwd: project, timeoutMs: input.timeoutMs });
+  const result = await runDevecoCli(args, { cwd: project, timeoutMs: input.timeoutMs, signal: input.signal });
   const output = combineOutput(result);
   const failure = devecoCliFailureMessage(result);
   if (failure) {

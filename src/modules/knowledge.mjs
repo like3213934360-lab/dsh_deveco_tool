@@ -10,13 +10,15 @@ import { ensureAccessToken } from "./auth.mjs";
  * 调用知识检索端点
  * @param {string} question 自然语言问题
  * @param {string} token accessToken
+ * @param {AbortSignal} [signal] 调用方取消信号
  * @returns {Promise<object>} 原始响应 JSON
  */
-async function callBigSearch(question, token) {
+async function callBigSearch(question, token, signal) {
   const response = await fetch(BIG_SEARCH_URL, {
     method: "POST",
     headers: { Authorization: token, "Content-Type": "application/json" },
     body: JSON.stringify({ question }),
+    signal,
   });
   return await response.json();
 }
@@ -51,16 +53,17 @@ function extractResult(data) {
 /**
  * 检索官方 ArkTS/HarmonyOS 知识库
  * @param {string} question 自然语言问题
+ * @param {AbortSignal} [signal] 调用方取消信号
  * @returns {Promise<string>} 检索结果文本
  */
-export async function searchKnowledge(question) {
+export async function searchKnowledge(question, signal) {
   let token = await ensureAccessToken();
-  let data = await callBigSearch(question, token);
+  let data = await callBigSearch(question, token, signal);
 
   // token 失效 -> 强制刷新后重试一次
   if (isAuthError(data)) {
     token = await ensureAccessToken({ force: true });
-    data = await callBigSearch(question, token);
+    data = await callBigSearch(question, token, signal);
   }
 
   const result = extractResult(data);

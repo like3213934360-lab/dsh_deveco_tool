@@ -148,11 +148,12 @@ function boundedTimeout(value) {
  *
  * @param {string[]} command Full argv.
  * @param {number} timeoutMs Bound for the call.
+ * @param {AbortSignal} [signal] Caller cancellation, forwarded to the hdc child.
  * @returns {Promise<{stdout: string, stderr: string, exitCode: number|null, signal: string|null}>} Result.
  */
-async function execHdc(command, timeoutMs) {
+async function execHdc(command, timeoutMs, signal) {
   try {
-    return await runHdc(command, timeoutMs);
+    return await runHdc(command, timeoutMs, { signal });
   } catch (error) {
     if (error.code === "ENOENT") {
       fail(`hdc could not be executed: ${command[0]}`, "HDC_NOT_FOUND");
@@ -379,7 +380,7 @@ function readMagic(filePath, length) {
  * @param {{emptyCode: string, magic?: Buffer, minBytes?: number}} expectations Validation rules.
  * @returns {Promise<number>} Byte size of the delivered file.
  */
-async function pullArtifact(hdc, deviceId, devicePath, localPath, timeoutMs, expectations) {
+async function pullArtifact(hdc, deviceId, devicePath, localPath, timeoutMs, expectations, signal) {
   const staging = `${localPath}.part`;
   fs.mkdirSync(path.dirname(localPath), { recursive: true });
   fs.rmSync(staging, { force: true });
@@ -387,6 +388,7 @@ async function pullArtifact(hdc, deviceId, devicePath, localPath, timeoutMs, exp
   const received = await execHdc(
     [hdc, ...targetArgs(deviceId), "file", "recv", devicePath, staging],
     timeoutMs,
+    signal,
   );
   const transportFailure = hdcFailureMessage(received);
   if (transportFailure) {
@@ -461,14 +463,14 @@ function frameSignatureOf(filePath) {
  *
  * @returns {Promise<{ok: true, native: object|null, output: object|null}|{ok: false, permanent: boolean, reason: string}>} Outcome.
  */
-async function captureWithSnapshotDisplay(hdc, deviceId, devicePath, format, scale, displayId, timeoutMs) {
+async function captureWithSnapshotDisplay(hdc, deviceId, devicePath, format, scale, displayId, timeoutMs, signal) {
   const args = [hdc, ...targetArgs(deviceId), "shell", "snapshot_display", "-f", devicePath, "-t", format];
   // Only pass -i when the caller named a display. Defaulting it to 0 would break every device whose
   // active display is not 0: unfolded foldables, 2-in-1, anything on an external screen.
   if (displayId !== undefined) args.push("-i", String(displayId));
   if (scale) args.push("-w", String(scale.width), "-h", String(scale.height));
 
-  const result = await execHdc(args, timeoutMs);
+  const result = await execHdc(args, timeoutMs, signal);
   return readCaptureOutcome(`${result.stdout}\n${result.stderr}`, deviceId);
 }
 
@@ -497,10 +499,11 @@ function readCaptureOutcome(combined, deviceId) {
   return { ok: true, native, nativeSizeChanged, output: parseSize(OUTPUT_SIZE_PATTERN, combined) };
 }
 
-async function captureWithScreenCap(hdc, deviceId, devicePath, timeoutMs) {
+async function captureWithScreenCap(hdc, deviceId, devicePath, timeoutMs, signal) {
   const result = await execHdc(
     [hdc, ...targetArgs(deviceId), "shell", "uitest", "screenCap", "-p", devicePath],
     timeoutMs,
+    signal,
   );
   const combined = `${result.stdout}\n${result.stderr}`;
   assertNoUitestConflict(combined, "uitest screenCap");
@@ -604,7 +607,7 @@ export async function uiSnapshot(input = {}) {
     // No probe capture when the size is unknown: the first call simply comes back native and
     // teaches the cache, and every later call -- in this process or the next -- can scale.
     const captured = await captureWithSnapshotDisplay(
-      hdc, deviceId, devicePath, format, scaleArguments(nativeSize, targetWidth), displayId, timeoutMs,
+      hdc, deviceId, devicePath, format, scaleArguments(nativeSize, targetWidth), displayId, timeoutMs, input.signal,
     );
     if (captured.ok) {
       nativeSize = captured.native ?? nativeSize;
@@ -627,7 +630,7 @@ export async function uiSnapshot(input = {}) {
     localPath = withExtension(requestedPath, "png");
     // This one is uitest, so unlike the path above it has to hold the device.
     await withUitest(deviceId, "screenCap", timeoutMs,
-      () => captureWithScreenCap(hdc, deviceId, devicePath, timeoutMs));
+      () => captureWithScreenCap(hdc, deviceId, devicePath, timeoutMs, input.signal));
   }
 
   const isPng = method === "uitest-screenCap" || format === "png";
@@ -635,7 +638,7 @@ export async function uiSnapshot(input = {}) {
     emptyCode: "UI_SNAPSHOT_EMPTY",
     magic: isPng ? PNG_MAGIC : JPEG_MAGIC,
     minBytes: MIN_IMAGE_BYTES,
-  });
+  }, input.signal);
 
   const frameSignature = frameSignatureOf(localPath);
   // Comparing here rather than making the caller do it is what saves the tokens: an unchanged
@@ -660,11 +663,12 @@ export async function uiSnapshot(input = {}) {
  *
  * @returns {Promise<string>} Local path of the pulled dump.
  */
-async function dumpLayout(hdc, deviceId, timeoutMs) {
+async function dumpLayout(hdc, deviceId, timeoutMs, signal) {
   const devicePath = devicePathFor("dump", "json");
   const result = await execHdc(
     [hdc, ...targetArgs(deviceId), "shell", "uitest", "dumpLayout", "-p", devicePath],
     timeoutMs,
+    signal,
   );
   const combined = `${result.stdout}\n${result.stderr}`;
   assertNoUitestConflict(combined, "uitest dumpLayout");
@@ -674,7 +678,7 @@ async function dumpLayout(hdc, deviceId, timeoutMs) {
   // Stable name, overwritten every call: unlike a screenshot, a stale layout is actively harmful,
   // and dumpPath only has to stay valid until the next dump.
   const localPath = path.join(defaultLocalDirectory(deviceId), "layout.json");
-  await pullArtifact(hdc, deviceId, devicePath, localPath, timeoutMs, { emptyCode: "UI_DUMP_EMPTY" });
+  await pullArtifact(hdc, deviceId, devicePath, localPath, timeoutMs, { emptyCode: "UI_DUMP_EMPTY" }, signal);
   return localPath;
 }
 
@@ -699,7 +703,7 @@ export async function uiFind(input = {}) {
   const deviceId = await resolveDevice(hdc, input.hvd);
   sweepStaleArtifacts(hdc, deviceId);
   return withUitest(deviceId, "dumpLayout", timeoutMs, async () => {
-    const dumpPath = await dumpLayout(hdc, deviceId, timeoutMs);
+    const dumpPath = await dumpLayout(hdc, deviceId, timeoutMs, input.signal);
     return analyseDump({ root: readDump(dumpPath), dumpPath, deviceId, selector });
   });
 }
@@ -770,6 +774,7 @@ export async function uiObserve(input = {}) {
     const result = await execHdc(
       [hdc, ...targetArgs(deviceId), "shell", buildObserveCommand(targets)],
       timeoutMs,
+      input.signal,
     );
     const combined = `${result.stdout}\n${result.stderr}`;
     assertNoUitestConflict(combined, "ui_observe");
@@ -780,6 +785,7 @@ export async function uiObserve(input = {}) {
         hdc, deviceId, timeoutMs, selector, targetWidth, displayId,
         localImage, startedAt, reason: combined.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0]
           || "the fused observe command produced no OBSERVE_OK marker",
+        signal: input.signal,
       });
     }
 
@@ -787,7 +793,7 @@ export async function uiObserve(input = {}) {
     await pullArtifact(hdc, deviceId, targets.archive, archivePath, timeoutMs, {
       emptyCode: "UI_OBSERVE_EMPTY",
       minBytes: MIN_TAR_BYTES,
-    });
+    }, input.signal);
     const files = readTar(fs.readFileSync(archivePath));
     const readEntry = (target) => entryByBaseName(files, path.posix.basename(target));
 
@@ -850,19 +856,19 @@ export async function uiObserve(input = {}) {
  *
  * @returns {Promise<object>} Same shape as the fused path.
  */
-async function observeSeparately({ hdc, deviceId, timeoutMs, selector, targetWidth, displayId, localImage, startedAt, reason }) {
-  const dumpPath = await dumpLayout(hdc, deviceId, timeoutMs);
+async function observeSeparately({ hdc, deviceId, timeoutMs, selector, targetWidth, displayId, localImage, startedAt, reason, signal }) {
+  const dumpPath = await dumpLayout(hdc, deviceId, timeoutMs, signal);
   const analysis = analyseDump({ root: readDump(dumpPath), dumpPath, deviceId, selector });
 
   const devicePath = devicePathFor("snap", "jpeg", true);
   const captured = await captureWithSnapshotDisplay(
-    hdc, deviceId, devicePath, scaleArguments(readDisplaySize(deviceId), targetWidth), displayId, timeoutMs,
+    hdc, deviceId, devicePath, scaleArguments(readDisplaySize(deviceId), targetWidth), displayId, timeoutMs, signal,
   );
   let bytes = 0;
   if (captured.ok) {
     bytes = await pullArtifact(hdc, deviceId, devicePath, localImage, timeoutMs, {
       emptyCode: "UI_SNAPSHOT_EMPTY", magic: JPEG_MAGIC, minBytes: MIN_IMAGE_BYTES,
-    });
+    }, signal);
   }
   return {
     ...analysis,
@@ -885,10 +891,11 @@ async function observeSeparately({ hdc, deviceId, timeoutMs, selector, targetWid
   };
 }
 
-async function sendInput(hdc, deviceId, inputArgs, timeoutMs, action) {
+async function sendInput(hdc, deviceId, inputArgs, timeoutMs, action, signal) {
   const result = await execHdc(
     [hdc, ...targetArgs(deviceId), "shell", "uitest", "uiInput", ...inputArgs],
     timeoutMs,
+    signal,
   );
   const combined = `${result.stdout}\n${result.stderr}`;
   assertNoUitestConflict(combined, `uitest uiInput ${action}`);
@@ -933,7 +940,7 @@ export async function uiTap(input = {}) {
     const inputArgs = buildInputArgs(input);
     return withUitest(deviceId, `uiInput ${input.action}`, timeoutMs, async () => {
       const startedAt = Date.now();
-      await sendInput(hdc, deviceId, inputArgs, timeoutMs, input.action);
+      await sendInput(hdc, deviceId, inputArgs, timeoutMs, input.action, input.signal);
       return {
         deviceId,
         action: input.action,
@@ -946,7 +953,7 @@ export async function uiTap(input = {}) {
   sweepStaleArtifacts(hdc, deviceId);
   return withUitest(deviceId, `uiInput ${input.action} by selector`, timeoutMs, async () => {
     const startedAt = Date.now();
-    const dumpPath = await dumpLayout(hdc, deviceId, timeoutMs);
+    const dumpPath = await dumpLayout(hdc, deviceId, timeoutMs, input.signal);
     const analysis = analyseDump({ root: readDump(dumpPath), dumpPath, deviceId, selector });
     const target = requireSingleTarget(analysis, selector);
 

@@ -142,7 +142,7 @@ export function discoverProjectEtsFiles(projectRoot) {
   return { roots, files };
 }
 
-function runNode(argv, cwd, timeoutMs, env) {
+function runNode(argv, cwd, timeoutMs, env, signal) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, argv, {
       cwd,
@@ -152,6 +152,18 @@ function runNode(argv, cwd, timeoutMs, env) {
     let stdout = "";
     let stderr = "";
     let settled = false;
+    // Caller cancellation kills the checker child, mirroring the timeout path.
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.kill("SIGTERM");
+      resolve({ stdout, stderr, exitCode: null, signal: "SIGTERM" });
+    };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
       if (!settled) {
@@ -179,7 +191,7 @@ function runNode(argv, cwd, timeoutMs, env) {
   });
 }
 
-export async function runArktsCheck({ files = [], project_path: explicitProject, timeoutMs } = {}) {
+export async function runArktsCheck({ files = [], project_path: explicitProject, timeoutMs, signal } = {}) {
   if (!fs.existsSync(CHECKER)) {
     const error = new Error(`ArkTS checker is missing: ${CHECKER}`);
     error.code = "ARKTS_CHECKER_NOT_FOUND";
@@ -244,7 +256,7 @@ export async function runArktsCheck({ files = [], project_path: explicitProject,
   const home = resolveDevecoHome().path;
   const env = { ...process.env };
   if (home) env.DEVECO_HOME = home;
-  const result = await runNode(argv, project, boundedTimeout, env);
+  const result = await runNode(argv, project, boundedTimeout, env, signal);
   let parsed;
   try {
     parsed = JSON.parse(result.stdout.trim());

@@ -158,7 +158,7 @@ function circuitRemainingMs() {
   return Math.max(0, CIRCUIT_COOLDOWN_MS - (Date.now() - circuitOpenedAt));
 }
 
-export async function callCodeGenieTool(name, args = {}) {
+export async function callCodeGenieTool(name, args = {}, signal) {
   const cooling = circuitRemainingMs();
   if (cooling > 0) {
     const error = new Error(
@@ -176,7 +176,7 @@ export async function callCodeGenieTool(name, args = {}) {
   await getCodeGenieTools();
   await syncProjectPath();
   try {
-    const result = await client.callTool({ name, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS });
+    const result = await client.callTool({ name, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS, signal });
     consecutiveTimeouts = 0;
     return result;
   } catch (error) {

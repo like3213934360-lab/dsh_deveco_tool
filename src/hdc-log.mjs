@@ -20,10 +20,10 @@ const SIGKILL_GRACE_MS = 2000;
  *
  * @param {string[]} command Full argv.
  * @param {number} timeoutMs Deadline for the call.
- * @param {{resolveOnTimeout?: boolean}} [options] Deadline behaviour.
+ * @param {{resolveOnTimeout?: boolean, signal?: AbortSignal}} [options] Deadline behaviour and caller cancellation.
  * @returns {Promise<{stdout: string, stderr: string, exitCode: number|null, signal: string|null, timedOut?: boolean}>} Result.
  */
-function run(command, timeoutMs = 120000, { resolveOnTimeout = false } = {}) {
+function run(command, timeoutMs = 120000, { resolveOnTimeout = false, signal } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command[0], command.slice(1), {
       stdio: ["ignore", "pipe", "pipe"],
@@ -32,11 +32,29 @@ function run(command, timeoutMs = 120000, { resolveOnTimeout = false } = {}) {
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const timer = setTimeout(() => {
+    // Caller cancellation: kill the child like a timeout would, escalating to
+    // SIGKILL so a wedged hdc never keeps holding the device. The abort path
+    // resolves with the killed-child shape instead of rejecting, so a caller
+    // that observes exec.signal can distinguish "cancelled" from a real error.
+    const killChain = () => {
       child.kill("SIGTERM");
       const killer = setTimeout(() => child.kill("SIGKILL"), SIGKILL_GRACE_MS);
       killer.unref?.();
       child.once("close", () => clearTimeout(killer));
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      killChain();
+      resolve({ stdout, stderr, exitCode: null, signal: "SIGTERM" });
+    };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
+    const timer = setTimeout(() => {
+      killChain();
       if (settled) return;
       settled = true;
       if (resolveOnTimeout) {
@@ -198,6 +216,7 @@ export async function hdcLog({
   log_prefix: prefix = "[VCODER_DEBUG]",
   lines = 2000,
   timeoutMs,
+  signal,
 } = {}) {
   if (!["collect", "clear", "list_devices"].includes(action)) {
     fail("action must be collect, clear, or list_devices", "HDC_ACTION_INVALID");
@@ -216,7 +235,7 @@ export async function hdcLog({
   const selectedDevice = await resolveDevice(hdc, deviceId);
 
   if (action === "clear") {
-    const result = await run([hdc, ...targetArgs(selectedDevice), "shell", "hilog", "-r"]);
+    const result = await run([hdc, ...targetArgs(selectedDevice), "shell", "hilog", "-r"], undefined, { signal });
     assertHdcSuccess(result, "hdc hilog -r");
     return { action, deviceId: selectedDevice, cleared: true, output: "Device log buffer cleared." };
   }
@@ -244,7 +263,7 @@ export async function hdcLog({
 
   const startedAt = Date.now();
   let deviceFiltered = filteredCommand !== null;
-  let result = await run(filteredCommand ?? plainCommand, budget, { resolveOnTimeout: true });
+  let result = await run(filteredCommand ?? plainCommand, budget, { resolveOnTimeout: true, signal });
   let all = cleanLines(result.stdout);
   if (!result.timedOut) {
     assertHdcSuccess(result, "hdc hilog");
@@ -259,7 +278,7 @@ export async function hdcLog({
         fail(`hdc hilog failed: ${diagnostic}`, "HDC_HILOG_ERROR");
       }
       deviceFiltered = false;
-      result = await run(plainCommand, remaining, { resolveOnTimeout: true });
+      result = await run(plainCommand, remaining, { resolveOnTimeout: true, signal });
       all = cleanLines(result.stdout);
       if (!result.timedOut) {
         assertHdcSuccess(result, "hdc hilog -x");
