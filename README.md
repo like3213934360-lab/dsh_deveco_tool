@@ -26,8 +26,8 @@ HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件**
 ```
 ┌─────────────────────────── DSH (DeepSeek Harness) ───────────────────────────┐
 │                                                                              │
-│   cordis.patch.yml  ──►  loader  ──►  import('/Users/.../dsh_deveco_tool/    │
-│   (profile 配置层)              │         src/plugin.mjs')                    │
+│   cordis.patch.yml  ──►  loader  ──►  import('dsh-deveco-tool')             │
+│   (profile 配置层)              │         (包名, 解析自 DSH 安装目录           │
 │                                ▼                                             │
 │   ┌──────────────────────────────────────────────────────────────────────┐   │
 │   │ src/plugin.mjs  插件入口                                              │   │
@@ -122,13 +122,23 @@ npm install
 
 ### 2. 接入 DSH（web profile）
 
-在 `~/.dsh/profiles/web/cordis.patch.yml` 追加（保存即热生效，无需重启 DSH）：
+web 模式的模块加载只认**包名**（从 DSH 安装目录的 `node_modules` 解析），因此先把插件挂载为可解析的包：
+
+```bash
+# 在 DSH 安装目录 node_modules 下建立符号链接
+ln -sfn /Users/dreamlike/DreamLike/dsh_deveco_tool \
+  /Users/dreamlike/.npm/_npx/1e7f6d9597241db0/node_modules/dsh-deveco-tool
+```
+
+> 注意：DSH 安装目录由 `npm exec @deepseek-ai/dsh` 生成（npx 缓存），路径可能随安装变化；npm 清理 npx 缓存后需重新链接。若 DSH 以其他方式安装，链接到其 node_modules 即可。
+
+再在 `~/.dsh/profiles/web/cordis.patch.yml` 追加（保存即热生效，无需重启 DSH）：
 
 ```yaml
 # 原生插件:devEco/HarmonyOS 诊断工具
 - insert:
     - id: dsh-deveco
-      name: '/Users/dreamlike/DreamLike/dsh_deveco_tool/src/plugin.mjs'
+      name: 'dsh-deveco-tool'
 ```
 
 验证配置树：

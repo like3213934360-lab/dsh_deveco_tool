@@ -36,6 +36,7 @@ import {
 import { PROXIED_CODEGENIE_TOOLS } from "./codegenie-tools.mjs";
 import { localTools } from "./tools-defs.mjs";
 
+
 // CodeGenie 也自带这些工具,但本插件自己实现,隐藏代理副本避免同名双实现。
 const LOCAL_OVERRIDE_TOOLS = ["init_project_path", "check_ets_files", "build_project", "start_app"];
 // UI 自动校验链不属于本插件; 原 MCP 将它们从工具列表隐藏, 此处保持一致(不注册)。
