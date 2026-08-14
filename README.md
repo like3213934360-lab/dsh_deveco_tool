@@ -9,6 +9,7 @@ HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件**
 ## 目录
 
 - [架构](#架构)
+- [前提条件](#前提条件)
 - [快速开始](#快速开始)
 - [工具清单](#工具清单)
 - [依赖](#依赖)
@@ -54,6 +55,59 @@ HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件**
 1. **注册层**（`plugin.mjs`）：DSH 插件入口，只做工具注册与分发，不含业务逻辑。
 2. **schema 表**（`tools-defs.mjs`）：26 个本地工具的 `name / description / inputSchema` 静态定义（`deveco_script` 的 `enum` 脚本清单在模块加载时动态生成）。
 3. **业务模块**（其余 22 个 `.mjs`）：各领域实现——静态检查、构建、设备、UI、LSP、脚本调度、登录、知识检索等，通过 spawn 子进程（hdc / DevEco CLI / LSP / CodeGenie / python / node）完成实际工作。
+
+---
+
+## 前提条件
+
+### 1. 运行时环境
+
+- **Node.js >= 20**（业务模块与插件入口均基于 Node ESM）
+- **DeepSeek Harness (DSH)** 已安装并运行（web profile），插件通过 `cordis.patch.yml` 挂载
+
+### 2. DevEco Studio（按功能而定）
+
+底层工具链（`hdc`、hvigor 构建、ArkTS SDK 类型库）随 DevEco Studio 一并安装，`config.mjs` 会自动探测：
+
+- **macOS 默认路径**：`/Applications/DevEco-Studio.app/Contents`（免配置）
+- **其他平台**：必须设置环境变量 `DEVECO_HOME` 或 `DEVECO_PATH` 指向 DevEco 安装目录
+
+各功能对 DevEco 的依赖：
+
+| 依赖程度 | 功能 | 说明 |
+|---|---|---|
+| **必须** | `hdc_log` / `ui_snapshot` / `ui_find` / `ui_observe` / `ui_tap` / `get_app_ui_tree` / `perform_ui_action` / `start_app` | `hdc` 二进制位于 DevEco SDK 内（`sdk/default/openharmony/toolchains/hdc`），可用 `HDC_PATH` 指向其他安装 |
+| **必须** | `build_project` / `start_app`（构建部分） | 通过 DevEco CLI 调用 hvigor，需要 SDK（`DEVECO_SDK_HOME` 自动从 DevEco home 推导） |
+| **必须（完整分析）** | `arkts_check` / `check_ets_files` / LSP 系列 | 检查器与语言服务器运行时使用 SDK 的 ArkTS 标准库类型；无 SDK 时语言服务器可启动但分析不完整 |
+| **不需要** | `deveco_status` / `deveco_login` / `deveco_logout`、`document_validate`、`deveco_script_catalog`、`jscrash_report` / `parse_jscrash_log`、`arkts_docs_search` / `arkui_docs_search` / `search_practices`、`switch_cwd` / `init_project_path`、`deveco_doctor`（报告环境缺失） | 纯分析/状态/本地检索类，不依赖本地 DevEco |
+
+> 设备类功能真正依赖的是 `hdc` 与 OpenHarmony SDK，不依赖 IDE 本身——只装命令行 SDK 并设置 `HDC_PATH` / `DEVECO_HOME` 也可工作。
+
+### 3. HarmonyOS 设备（设备类功能）
+
+`hdc_log` / `ui_*` / `start_app` / `get_app_ui_tree` / `perform_ui_action` 需要连接真机（USB 或网络方式），且能被 `hdc list targets` 识别。无设备时这些工具会报 `HDC_NO_DEVICE`。
+
+### 4. 网络（部分功能）
+
+- `deveco_login` / `deveco_status` / `deveco_logout`：访问华为 DevEco 授权站点
+- `arkts_knowledge_search`：调用 CodeGenie 在线检索接口
+- `build_project`：首次构建时 `ohpm install` 需要拉取依赖
+
+本地知识库检索（`arkts_docs_search` / `arkui_docs_search` / `search_practices`）与日志分析类不依赖网络。
+
+### 5. Python（可选，部分脚本）
+
+`deveco_script` 中的 10 个诊断脚本（`appfreeze_analyze`、`memleak_analyze`、`arkts_docs_search`、`ui_score` 等）需要 **Python 3** 解释器；`ui_score` 额外需要 **Pillow**。可用 `PYTHON` 环境变量指定解释器（未设置时自动探测 `python3`）。
+
+### 6. 环境变量汇总
+
+| 变量 | 用途 |
+|---|---|
+| `DEVECO_HOME` / `DEVECO_PATH` | DevEco 安装目录（非 macOS 默认路径时必须设置） |
+| `HDC_PATH` | hdc 可执行文件路径（可选，默认从 DevEco SDK 推导） |
+| `OHOS_SDK_PATH` | ArkTS LSP 的 SDK 路径（可选，默认从 DevEco home 推导） |
+| `PYTHON` | Python 解释器（可选，默认探测 `python3`） |
+| `DEVECO_CODEGENIE_ENTRY` | CodeGenie 子进程入口（测试用，可选） |
 
 ---
 
