@@ -287,7 +287,7 @@ node --check src/*.mjs # 语法检查(全部模块)
 
 ## 已知限制
 
-- skills 资产（19 个脚本 + 知识库，11 个 skill 约 31M）随仓库分发在 `skills/` 下，开箱即用；`DEVECO_SKILLS_ROOT` 可覆盖指向仓库外另一份资产。根目录解析结果与每个脚本的落盘状态见 `deveco_doctor` 的 `environment.skillsRoot*` 与 `scripts`（`rootExists` / `missing` / 每项 `exists`）。资产缺失时 `deveco_script` 报 `SKILLS_ROOT_NOT_FOUND`（整个根找不到）或 `SCRIPT_NOT_FOUND`（单个脚本缺失），两者都带 `hint`。
+- skills 资产（19 个脚本 + 其运行时依赖，11 个 skill 约 27M）随仓库分发在 `skills/` 下，开箱即用；只保留脚本运行时真正读取的文件，上游 skill 包中面向 agent 的说明与测试样例不入库；`DEVECO_SKILLS_ROOT` 可覆盖指向仓库外另一份资产。根目录解析结果与每个脚本的落盘状态见 `deveco_doctor` 的 `environment.skillsRoot*` 与 `scripts`（`rootExists` / `missing` / 每项 `exists`）。资产缺失时 `deveco_script` 报 `SKILLS_ROOT_NOT_FOUND`（整个根找不到）或 `SCRIPT_NOT_FOUND`（单个脚本缺失），两者都带 `hint`。
 - 依赖 dev 环境：ArkTS LSP、DevEco CLI、hdc、CodeGenie child 均依赖本机 DevEco Studio 安装（`DEVECO_HOME` / `DEVECO_PATH` 自动探测，可用环境变量覆盖；macOS 默认路径为 `/Applications/DevEco-Studio.app/Contents`，其他平台需设置环境变量）。
 - Phase 1 输出呈现为 JSON 文本，未启用 DSH 卡片/图片内联。
 
@@ -323,7 +323,10 @@ dsh_deveco_tool/
 │   │   ├── config.mjs    # 登录端点常量
 │   │   └── knowledge.mjs # CodeGenie 知识库检索
 │   └── upstream/         # 检查器与配套文档(arkts-check.cjs 等)
-├── skills/               # deveco_script 的 19 个脚本 + 知识库(11 个 skill, 约 31M)
+├── skills/               # deveco_script 的 19 个脚本 + 其运行时资产(11 个 skill, 约 27M)
+│   # 仅保留运行时闭包: 入口脚本及其读取的索引/知识库。上游 skill 包中给 agent 读的
+│   # SKILL.md、test_cases、evals、agents 及脚本不读的 references 均已剔除。
+│   # 26M 集中在两个知识库(arkui 17M / arkts 9.3M), 其余 9 个 skill 合计不到 1.3M。
 │   ├── arkts-runtime-fix/            hmos-apifault-analysis/
 │   ├── arkui-component-best-practices/ hmos-appfreeze-analysis/
 │   ├── deveco-create-project/        hmos-arkts-knowledge-retriever/
