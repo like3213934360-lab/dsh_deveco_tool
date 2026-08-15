@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { REPO_ROOT, SKILLS_ROOT, resolveDevecoHome } from "./config.mjs";
+import { REPO_ROOT, SKILLS_ROOT, resolveDevecoHome, resolveSkillsRoot } from "./config.mjs";
 import { getProjectPath } from "./project-context.mjs";
 // Shared with the DevEco CLI runner; see that module for why the hvigor daemon stays out of reach.
 import { terminateProcessTree } from "./process-tree.mjs";
@@ -155,18 +155,67 @@ export function pythonStatus() {
   };
 }
 
+/**
+ * 脚本的绝对路径, skills 根不可用时为 null。
+ * 返回 null 而不是拼接: SKILLS_ROOT 为空时 path.join("", skill, file) 会得到一个相对路径,
+ * spawn 会拿它相对 cwd 去找, 于是错误从"资产没配好"变成"某个项目目录里缺文件"。
+ * @param {{skill: string, file: string}} definition 脚本定义。
+ * @returns {string|null} 绝对路径, 或 null 表示 skills 根未解析出来。
+ */
 function scriptPath(definition) {
+  if (!SKILLS_ROOT) return null;
   return path.join(SKILLS_ROOT, definition.skill, definition.file);
 }
 
+/**
+ * 相对 skills 根的展示路径, 不经过 SKILLS_ROOT, 因此资产缺失时依然完整。
+ * @param {{skill: string, file: string}} definition 脚本定义。
+ * @returns {string} 形如 `skills/<skill>/<file>` 的相对路径。
+ */
+function displayPath(definition) {
+  return path.join("skills", definition.skill, definition.file);
+}
+
+// 必须保持无 IO: tools-defs 在模块加载期用它构建 deveco_script 的 enum, 而工具签名不能
+// 因为某个脚本文件缺失就变形 —— 落盘状态是诊断信息, 归 scriptsStatus()。
 export function listScripts() {
   return Object.entries(SCRIPT_DEFINITIONS).map(([id, definition]) => ({
     id,
     skill: definition.skill,
-    file: path.join("skills", path.relative(SKILLS_ROOT, scriptPath(definition))),
+    file: displayPath(definition),
     runtime: definition.runtime ?? "node",
     description: definition.description,
   }));
+}
+
+/**
+ * listScripts() 加上每个脚本此刻是否真的在盘上, 以及 skills 根的解析来源。
+ * 注册表是静态的, 所以光看脚本列表分不出"已装好"和"根本找不到资产", 这一层就是补这个差。
+ * @returns {{root: string|null, rootSource: string, rootExists: boolean, total: number,
+ *   missing: number, scripts: Array<object>}} 诊断视图。
+ */
+export function scriptsStatus() {
+  const root = resolveSkillsRoot();
+  const rootExists = Boolean(root.path) && fs.existsSync(root.path);
+  const scripts = Object.entries(SCRIPT_DEFINITIONS).map(([id, definition]) => {
+    const absolute = scriptPath(definition);
+    return {
+      id,
+      skill: definition.skill,
+      file: displayPath(definition),
+      runtime: definition.runtime ?? "node",
+      description: definition.description,
+      exists: absolute !== null && fs.existsSync(absolute),
+    };
+  });
+  return {
+    root: root.path || null,
+    rootSource: root.source,
+    rootExists,
+    total: scripts.length,
+    missing: scripts.filter((script) => !script.exists).length,
+    scripts,
+  };
 }
 
 function kebabCase(value) {
@@ -230,10 +279,24 @@ export async function runRegisteredScript(id, input = {}) {
     throw error;
   }
 
+  // "整个根没找到"和"这一个脚本缺了"是两种故障: 前者说明仓库的 skills/ 没跟着签出(或
+  // DEVECO_SKILLS_ROOT 配错), 后者说明资产在但不完整。混成一条会把人引向错的方向。
+  const skillsHint = `确认仓库的 ${path.join(REPO_ROOT, "skills")} 存在, 或用 DEVECO_SKILLS_ROOT 指向另一份资产。`
+    + "deveco_doctor 的 environment.skillsRoot / scripts 会报告当前解析结果。";
   const file = scriptPath(definition);
+  if (file === null) {
+    const error = new Error("skills 资产目录未找到, 无法定位任何注册脚本。");
+    error.code = "SKILLS_ROOT_NOT_FOUND";
+    error.hint = skillsHint;
+    throw error;
+  }
   if (!fs.existsSync(file)) {
+    const root = resolveSkillsRoot();
     const error = new Error(`Registered script is missing: ${file}`);
     error.code = "SCRIPT_NOT_FOUND";
+    error.hint = root.source === "environment-missing"
+      ? `DEVECO_SKILLS_ROOT 指向的 ${root.path} 不是一个存在的目录。`
+      : skillsHint;
     throw error;
   }
 

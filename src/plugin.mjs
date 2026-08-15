@@ -3,7 +3,7 @@
  * @author dreamlike
  *
  * DSH 原生插件入口:把 deveco_tool 的 29 个工具注册为 DSH 工具。
- * 业务模块提取自 /Users/dreamlike/DreamLike/deveco_tool(原项目未改动),
+ * 业务模块提取自上游 deveco_tool 项目(原项目未改动),
  * 工具 schema 表逐字来自 tools-defs.mjs(提取自原 server.mjs 的 localTools)。
  *
  * Phase 2 增强:
@@ -23,7 +23,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { sweepLocalScreenshots, sweepOrphanedAttachments } from "./attachment-gc.mjs";
-import { listScripts, runRegisteredScript } from "./script-registry.mjs";
+import { runRegisteredScript, scriptsStatus } from "./script-registry.mjs";
 import { setProjectPath } from "./project-context.mjs";
 import { collectDoctorReport } from "./doctor.mjs";
 import { searchKnowledge } from "./modules/knowledge.mjs";
@@ -133,8 +133,16 @@ async function dispatch(name, args, exec) {
   const signal = exec?.signal;
   switch (name) {
     case "deveco_script_catalog": {
-      const scripts = listScripts();
-      return { scripts, count: scripts.length };
+      // 带上 skills 根与每个脚本的 exists: 目录整个缺失时, 光看一份静态清单会以为都能跑。
+      const status = scriptsStatus();
+      return {
+        scripts: status.scripts,
+        count: status.scripts.length,
+        skillsRoot: status.root,
+        skillsRootSource: status.rootSource,
+        skillsRootExists: status.rootExists,
+        missing: status.missing,
+      };
     }
     case "deveco_script": {
       if (typeof args.script !== "string") {

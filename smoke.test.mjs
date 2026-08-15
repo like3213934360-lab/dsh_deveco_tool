@@ -8,6 +8,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { apply } from "./src/plugin.mjs";
+import { resolveSkillsRoot } from "./src/config.mjs";
+import { runRegisteredScript, scriptsStatus } from "./src/script-registry.mjs";
 
 function makeFakeCtx() {
   const registered = [];
@@ -107,4 +109,54 @@ test("dispose handler is registered", () => {
   const ctx = makeFakeCtx();
   apply(ctx);
   assert.equal(typeof ctx.events.dispose, "function");
+});
+
+// skills 资产随仓库分发, 所以"19 个脚本都在盘上"是可以直接断言的事实, 而不是环境假设。
+// 这条守住了回归: 资产漏签出或路径解析改坏, 这里立刻红, 而不是等某次真实调用才发现。
+test("bundled skills resolve and every registered script exists", () => {
+  const root = resolveSkillsRoot();
+  assert.equal(root.source, "repo", "未设 DEVECO_SKILLS_ROOT 时应解析到仓库内 skills/");
+  assert.ok(root.path.endsWith("skills"));
+
+  const status = scriptsStatus();
+  assert.equal(status.rootExists, true);
+  assert.equal(status.total, 19);
+  assert.equal(
+    status.missing,
+    0,
+    `缺失脚本: ${status.scripts.filter((s) => !s.exists).map((s) => s.file).join(", ")}`,
+  );
+});
+
+// 显式配置必须是权威的: 配错时如实报错, 不能静默回落到仓库内那份 —— 否则用户看到一切正常,
+// 而跑的是他没打算用的资产。
+test("DEVECO_SKILLS_ROOT is authoritative and never silently falls back", () => {
+  const previous = process.env.DEVECO_SKILLS_ROOT;
+  process.env.DEVECO_SKILLS_ROOT = "/nonexistent/skills-root";
+  try {
+    const root = resolveSkillsRoot();
+    assert.equal(root.source, "environment-missing");
+    assert.equal(root.configured, true);
+    assert.ok(root.path.includes("nonexistent"), "应保留用户配的路径, 而不是换成仓库内那份");
+  } finally {
+    if (previous === undefined) delete process.env.DEVECO_SKILLS_ROOT;
+    else process.env.DEVECO_SKILLS_ROOT = previous;
+  }
+});
+
+test("deveco_script_catalog reports skills availability", async () => {
+  const ctx = makeFakeCtx();
+  apply(ctx);
+  const tool = ctx.registered.find((item) => item.name === "deveco_script_catalog");
+  const value = await tool.execute({}, { signal: new AbortController().signal });
+  assert.equal(value.skillsRootExists, true);
+  assert.equal(value.missing, 0);
+  assert.ok(value.scripts.every((script) => script.exists === true));
+});
+
+test("unknown script id is rejected before any spawn", async () => {
+  await assert.rejects(
+    () => runRegisteredScript("no_such_script", {}),
+    (error) => error.code === "UNKNOWN_SCRIPT",
+  );
 });

@@ -5,8 +5,6 @@ import { fileURLToPath } from "node:url";
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
 
 export const REPO_ROOT = path.resolve(sourceDir, "..");
-// Skills 目录不复制(约 43M), 只读引用原 deveco_tool 项目; 原项目路径变更时需同步修改此处。
-export const SKILLS_ROOT = "/Users/dreamlike/DreamLike/deveco_tool/skills";
 
 function existingDirectory(candidate) {
   try {
@@ -15,6 +13,40 @@ function existingDirectory(candidate) {
     return false;
   }
 }
+
+/**
+ * 解析 skills 资产根目录。
+ *
+ * 19 个注册脚本连同它们的知识库都随仓库分发在 skills/ 下, 所以默认情况下无需任何配置。
+ * DEVECO_SKILLS_ROOT 仅用于覆盖 —— 指向仓库外另一份资产。与 resolveDevecoHome 一致,
+ * 显式配置优先于探测; 显式配置指向的目录不存在时仍返回该路径并标记 environment-missing,
+ * 让报错指向用户真正配的位置, 而不是静默回落到仓库内那份, 掩盖配错的事实。
+ *
+ * @returns {{path: string, source: string, configured: boolean}} 解析结果; 候选都不存在
+ *   且未配置环境变量时 path 为空字符串, 调用方必须显式处理而不能当相对路径拼接。
+ */
+export function resolveSkillsRoot() {
+  const configured = process.env.DEVECO_SKILLS_ROOT;
+  if (configured) {
+    const absolute = path.resolve(configured);
+    return {
+      path: absolute,
+      source: existingDirectory(absolute) ? "environment" : "environment-missing",
+      configured: true,
+    };
+  }
+
+  const bundled = path.join(REPO_ROOT, "skills");
+  if (existingDirectory(bundled)) {
+    return { path: bundled, source: "repo", configured: false };
+  }
+
+  return { path: "", source: "not-found", configured: false };
+}
+
+// 加载期解析一次: script-registry 的路径拼接和 tools-defs 的 enum 构建都发生在加载期。
+// 空字符串表示没有任何候选可用 —— scriptPath() 必须挡住它。
+export const SKILLS_ROOT = resolveSkillsRoot().path;
 
 export function resolveDevecoHome() {
   const configured = process.env.DEVECO_HOME || process.env.DEVECO_PATH;
@@ -67,12 +99,17 @@ export function resolveHdcPath() {
 export function collectEnvironmentStatus() {
   const deveco = resolveDevecoHome();
   const hdc = resolveHdcPath();
+  // 实时解析而非复用加载期的 SKILLS_ROOT: doctor 存在的意义就是报告此刻的真实情况。
+  const skills = resolveSkillsRoot();
   return {
     node: process.version,
     platform: process.platform,
     arch: process.arch,
     repoRoot: REPO_ROOT,
-    skillsRoot: SKILLS_ROOT,
+    skillsRoot: skills.path || null,
+    skillsRootSource: skills.source,
+    // 之前这里直出常量, 目录不存在也照报, 于是 doctor 看着正常而每个脚本都跑不起来。
+    skillsRootExists: Boolean(skills.path) && existingDirectory(skills.path),
     devecoHome: deveco.path || null,
     devecoHomeSource: deveco.source,
     hdcPath: hdc,

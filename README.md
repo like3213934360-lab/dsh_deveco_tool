@@ -27,7 +27,7 @@ HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件**
 ┌─────────────────────────── DSH (DeepSeek Harness) ───────────────────────────┐
 │                                                                              │
 │   cordis.patch.yml  ──►  loader  ──►  import('dsh-deveco-tool')             │
-│   (profile 配置层)              │         (包名, 解析自 DSH 安装目录           │
+│   (profile 配置层)              │         (包名, 解析基准 = profile 目录)      │
 │                                ▼                                             │
 │   ┌──────────────────────────────────────────────────────────────────────┐   │
 │   │ src/plugin.mjs  插件入口                                              │   │
@@ -107,6 +107,7 @@ HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件**
 | `HDC_PATH` | hdc 可执行文件路径（可选，默认从 DevEco SDK 推导） |
 | `OHOS_SDK_PATH` | ArkTS LSP 的 SDK 路径（可选，默认从 DevEco home 推导） |
 | `PYTHON` | Python 解释器（可选，默认探测 `python3`） |
+| `DEVECO_SKILLS_ROOT` | skills 资产根目录（可选，默认用仓库内 `skills/`；设置后即为权威，指向无效目录时不回落） |
 | `DEVECO_CODEGENIE_ENTRY` | CodeGenie 子进程入口（测试用，可选） |
 
 ---
@@ -116,21 +117,25 @@ HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件**
 ### 1. 安装依赖
 
 ```bash
-cd /Users/dreamlike/DreamLike/dsh_deveco_tool
+cd <REPO>        # 本仓库签出目录
 npm install
 ```
 
 ### 2. 接入 DSH（web profile）
 
-web 模式的模块加载只认**包名**（从 DSH 安装目录的 `node_modules` 解析），因此先把插件挂载为可解析的包：
+DSH 的 loader 用**包名**导入插件，解析基准是 **profile 目录**（`~/.dsh/profiles/<profile>/`），不是 DSH 的安装目录 —— boot 时 `ctx.baseUrl` 被设为 profile 配置文件所在目录，loader 的 `import()` 以它为基准走 Node 的 parent-walk。因此符号链接要建在 profile 的 `node_modules` 下：
 
 ```bash
-# 在 DSH 安装目录 node_modules 下建立符号链接
-ln -sfn /Users/dreamlike/DreamLike/dsh_deveco_tool \
-  /Users/dreamlike/.npm/_npx/1e7f6d9597241db0/node_modules/dsh-deveco-tool
+# 用你的实际仓库路径替换 <REPO>
+mkdir -p ~/.dsh/profiles/web/node_modules
+ln -sfn <REPO> ~/.dsh/profiles/web/node_modules/dsh-deveco-tool
 ```
 
-> 注意：DSH 安装目录由 `npm exec @deepseek-ai/dsh` 生成（npx 缓存），路径可能随安装变化；npm 清理 npx 缓存后需重新链接。若 DSH 以其他方式安装，链接到其 node_modules 即可。
+> **不要链接到 DSH 安装目录（npx 缓存）下的 `node_modules`。** 那条路径不在 profile 的解析链上，启动会报
+> `failed to import loader entry dsh-deveco (dsh-deveco-tool): Cannot find package 'dsh-deveco-tool' imported from ~/.dsh/profiles/web/`；
+> 而且 `npm exec @deepseek-ai/dsh` 重建 npx 缓存时会把该目录下的链接清掉。
+>
+> 注意 profile 的 `node_modules` 由 pnpm 管理（供 out-of-tree 插件使用），而本插件是手工链接、不在 `profiles/web/package.json` 的 `dependencies` 里。若日后跑 `dsh plugin --profile web add/install`，pnpm 有可能修剪掉这个非托管链接 —— 届时重新执行上面的 `ln -sfn` 即可。
 
 再在 `~/.dsh/profiles/web/cordis.patch.yml` 追加（保存即热生效，无需重启 DSH）：
 
@@ -140,6 +145,17 @@ ln -sfn /Users/dreamlike/DreamLike/dsh_deveco_tool \
     - id: dsh-deveco
       name: 'dsh-deveco-tool'
 ```
+
+#### profile 层与 home 层 patch 的差异
+
+补丁按 `bundle 层 → profile 层 → home 层 → --patch overlay` 的顺序合成，后者覆盖前者，两个用户层都被热监听：
+
+| 文件 | 作用域 | 说明 |
+| --- | --- | --- |
+| `~/.dsh/profiles/<profile>/cordis.patch.yml` | 单个 profile | 上面用的就是这层。**不会被启动流程重置** —— profile 初始化只在文件不存在时写入模板 |
+| `~/.dsh/cordis.patch.yml` | 所有 profile | 想让插件在 web / headless 等每个 profile 都生效时写这里；默认不存在，需自建 |
+
+> 别把 `cordis.patch.yml` 和同目录的 `cordis.yml` 搞混：后者是 loader 的 leaf root，内容恒为 `[]`，**每次启动都会被重写**，文件头自己写着 "Edit cordis.patch.yml, not this file"。看到它被重置属正常现象，不代表你的插件配置丢了。
 
 验证配置树：
 
@@ -271,7 +287,7 @@ node --check src/*.mjs # 语法检查(全部模块)
 
 ## 已知限制
 
-- `SKILLS_ROOT` 指向本机固定的外部 skills 目录（`/Users/dreamlike/DreamLike/deveco_tool/skills`，脚本与知识库所在处），该目录不可用时 `deveco_script` 系列会报 `SCRIPT_NOT_FOUND`。
+- skills 资产（19 个脚本 + 知识库，11 个 skill 约 31M）随仓库分发在 `skills/` 下，开箱即用；`DEVECO_SKILLS_ROOT` 可覆盖指向仓库外另一份资产。根目录解析结果与每个脚本的落盘状态见 `deveco_doctor` 的 `environment.skillsRoot*` 与 `scripts`（`rootExists` / `missing` / 每项 `exists`）。资产缺失时 `deveco_script` 报 `SKILLS_ROOT_NOT_FOUND`（整个根找不到）或 `SCRIPT_NOT_FOUND`（单个脚本缺失），两者都带 `hint`。
 - 依赖 dev 环境：ArkTS LSP、DevEco CLI、hdc、CodeGenie child 均依赖本机 DevEco Studio 安装（`DEVECO_HOME` / `DEVECO_PATH` 自动探测，可用环境变量覆盖；macOS 默认路径为 `/Applications/DevEco-Studio.app/Contents`，其他平台需设置环境变量）。
 - Phase 1 输出呈现为 JSON 文本，未启用 DSH 卡片/图片内联。
 
@@ -307,6 +323,14 @@ dsh_deveco_tool/
 │   │   ├── config.mjs    # 登录端点常量
 │   │   └── knowledge.mjs # CodeGenie 知识库检索
 │   └── upstream/         # 检查器与配套文档(arkts-check.cjs 等)
+├── skills/               # deveco_script 的 19 个脚本 + 知识库(11 个 skill, 约 31M)
+│   ├── arkts-runtime-fix/            hmos-apifault-analysis/
+│   ├── arkui-component-best-practices/ hmos-appfreeze-analysis/
+│   ├── deveco-create-project/        hmos-arkts-knowledge-retriever/
+│   ├── hmos-instrument-test/         hmos-arkui-knowledge-retriever/
+│   ├── hmos-local-test/              hmos-memleak-analysis/
+│   └── ui-reconstruction-score/
+├── patches/              # 上游依赖补丁(见 patches/README)
 └── node_modules/         # 依赖(不入库)
 ```
 

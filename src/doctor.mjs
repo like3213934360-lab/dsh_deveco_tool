@@ -16,7 +16,7 @@ import { hdcStatus } from "./hdc-log.mjs";
 import { lspStatus } from "./lsp.mjs";
 import { authStatus } from "./modules/auth.mjs";
 import { getProjectContext } from "./project-context.mjs";
-import { listScripts, pythonStatus } from "./script-registry.mjs";
+import { pythonStatus, scriptsStatus } from "./script-registry.mjs";
 
 // Unlike tools/list, doctor is invoked precisely to find out whether the child works, so it waits
 // for a definitive answer instead of guessing. The budget covers a full retry cycle (2 attempts x
@@ -61,7 +61,8 @@ export async function collectDoctorReport(options = {}) {
   return {
     environment: collectEnvironmentStatus(),
     project: getProjectContext(),
-    scripts: listScripts(),
+    // 带落盘状态: 注册表是静态的, 只列名字会让"资产没配"看起来和"一切正常"一样。
+    scripts: scriptsStatus(),
     python: pythonStatus(),
     codegenie: {
       // Advertised from a static table, so these stay callable names even when the child is down.
