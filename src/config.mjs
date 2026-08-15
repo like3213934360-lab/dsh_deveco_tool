@@ -76,30 +76,45 @@ function defaultDevecoHomes() {
   ];
 }
 
+/**
+ * 归一化一个 DevEco 安装路径。
+ * @param {string} candidate 候选路径。
+ * @returns {string} 绝对路径; macOS 的 .app 包指向其 Contents, SDK 与工具链都在那下面。
+ */
+function normalizeDevecoPath(candidate) {
+  const absolute = path.resolve(candidate);
+  return absolute.endsWith(".app") ? path.join(absolute, "Contents") : absolute;
+}
+
+/**
+ * 解析 DevEco Studio 安装目录。
+ *
+ * 显式配置是权威的, 与 resolveSkillsRoot 同一套语义: 配了 DEVECO_HOME 却指向无效目录
+ * 时如实报 environment-missing, 而不是回落到平台默认路径。回落在这里格外危险 —— hdc、
+ * SDK、构建与部署全都从这个路径推导, 用户以为在对 A 操作, 实际打到了 B, 而原实现连
+ * source 都照报 "environment", 等于把这个偏差藏了起来。
+ *
+ * @returns {{path: string, source: string, configured: boolean}} 解析结果。
+ */
 export function resolveDevecoHome() {
   const configured = process.env.DEVECO_HOME || process.env.DEVECO_PATH;
-  const candidates = [configured, ...defaultDevecoHomes()].filter(Boolean);
+  if (configured) {
+    const normalized = normalizeDevecoPath(configured);
+    return {
+      path: normalized,
+      source: existingDirectory(normalized) ? "environment" : "environment-missing",
+      configured: true,
+    };
+  }
 
-  for (const candidate of candidates) {
-    const absolute = path.resolve(candidate);
-    // .app 是 macOS 的包目录, SDK 与工具链都在 Contents 下; 其他平台的路径不会命中。
-    const normalized = absolute.endsWith(".app")
-      ? path.join(absolute, "Contents")
-      : absolute;
+  for (const candidate of defaultDevecoHomes()) {
+    const normalized = normalizeDevecoPath(candidate);
     if (existingDirectory(normalized)) {
-      return {
-        path: normalized,
-        source: configured ? "environment" : `${process.platform}-default`,
-        configured: Boolean(configured),
-      };
+      return { path: normalized, source: `${process.platform}-default`, configured: false };
     }
   }
 
-  return {
-    path: configured ? path.resolve(configured) : "",
-    source: configured ? "environment" : "not-found",
-    configured: Boolean(configured),
-  };
+  return { path: "", source: "not-found", configured: false };
 }
 
 export function resolveHdcPath() {

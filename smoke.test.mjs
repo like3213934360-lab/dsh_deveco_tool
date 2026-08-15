@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
-import { resolveSkillsRoot } from "./src/config.mjs";
+import { resolveDevecoHome, resolveSkillsRoot } from "./src/config.mjs";
 import { runRegisteredScript, scriptsStatus } from "./src/script-registry.mjs";
 import { sweepOnce, sweepOrphanedAttachments } from "./src/attachment-gc.mjs";
 
@@ -146,6 +146,28 @@ test("DEVECO_SKILLS_ROOT is authoritative and never silently falls back", () => 
   } finally {
     if (previous === undefined) delete process.env.DEVECO_SKILLS_ROOT;
     else process.env.DEVECO_SKILLS_ROOT = previous;
+  }
+});
+
+// 与上一条同一套语义, 但后果更重: hdc、SDK、构建、部署全从 devecoHome 推导, 静默
+// 回落意味着用户以为在对 A 操作而实际打到了 B。
+test("DEVECO_HOME is authoritative and never silently falls back", () => {
+  const previousHome = process.env.DEVECO_HOME;
+  const previousPath = process.env.DEVECO_PATH;
+  process.env.DEVECO_HOME = "/nonexistent-deveco-home";
+  delete process.env.DEVECO_PATH;
+  try {
+    const home = resolveDevecoHome();
+    assert.equal(home.source, "environment-missing");
+    assert.equal(home.configured, true);
+    assert.ok(
+      home.path.includes("nonexistent-deveco-home"),
+      "必须保留用户配的路径, 而不是换成平台默认目录还自称 environment",
+    );
+  } finally {
+    if (previousHome === undefined) delete process.env.DEVECO_HOME;
+    else process.env.DEVECO_HOME = previousHome;
+    if (previousPath !== undefined) process.env.DEVECO_PATH = previousPath;
   }
 });
 
