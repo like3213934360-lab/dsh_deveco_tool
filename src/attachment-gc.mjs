@@ -221,4 +221,31 @@ function sweepLocalScreenshots(maxAgeMs = SWEEP_MIN_AGE_MS) {
   return stats;
 }
 
-export { sweepLocalScreenshots, sweepOrphanedAttachments };
+/**
+ * 全进程只清扫一次的标记。
+ *
+ * 挂在 globalThis 而不是模块级变量: DSH 的 HMR 在插件文件变化时重新 apply, 模块图
+ * 也跟着重新求值, 模块级的 once 标记会一并重置, 于是改一次代码就重扫一遍全局附件库。
+ * Symbol.for 的键在整个进程里共享, 新旧模块实例看到的是同一个。
+ */
+const SWEEP_MARKER = Symbol.for("dsh-deveco-tool.attachmentSweepAt");
+/** 两次清扫之间的最小间隔; 与附件的年龄门槛同量级, 更频繁也扫不出新东西。 */
+const SWEEP_INTERVAL_MS = SWEEP_MIN_AGE_MS;
+
+/**
+ * 启动清扫的入口: 同一进程内按 SWEEP_INTERVAL_MS 节流, 避免 HMR 重载反复全库扫描。
+ * @param {string} dshHome DSH_HOME 根目录
+ * @returns {{attachments: object, screenshots: object}|null} 本次统计; 被节流时为 null
+ */
+function sweepOnce(dshHome) {
+  const last = globalThis[SWEEP_MARKER];
+  const now = Date.now();
+  if (typeof last === "number" && now - last < SWEEP_INTERVAL_MS) return null;
+  globalThis[SWEEP_MARKER] = now;
+  return {
+    attachments: sweepOrphanedAttachments(dshHome),
+    screenshots: sweepLocalScreenshots(),
+  };
+}
+
+export { sweepLocalScreenshots, sweepOnce, sweepOrphanedAttachments };

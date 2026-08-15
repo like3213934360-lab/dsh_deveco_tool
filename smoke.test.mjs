@@ -14,7 +14,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { resolveSkillsRoot } from "./src/config.mjs";
 import { runRegisteredScript, scriptsStatus } from "./src/script-registry.mjs";
-import { sweepOrphanedAttachments } from "./src/attachment-gc.mjs";
+import { sweepOnce, sweepOrphanedAttachments } from "./src/attachment-gc.mjs";
 
 function makeFakeCtx() {
   const registered = [];
@@ -213,6 +213,23 @@ test("attachment GC deletes orphans once the reference set is complete", () => {
     assert.equal(fs.existsSync(object), false);
   } finally {
     fixture.cleanup();
+  }
+});
+
+// DSH 的 HMR 每次改动都重新 apply 插件, 模块图也重新求值。清扫要按进程节流, 否则
+// 改一行代码就重扫一遍全局附件库。标记挂在 globalThis 上正是为了跨模块重载存活。
+test("startup sweep is throttled across HMR reloads", () => {
+  const marker = Symbol.for("dsh-deveco-tool.attachmentSweepAt");
+  const previous = globalThis[marker];
+  const fixture = makeGcFixture();
+  try {
+    delete globalThis[marker];
+    assert.notEqual(sweepOnce(fixture.root), null, "首次必须真的执行");
+    assert.equal(sweepOnce(fixture.root), null, "同进程内的后续调用必须被节流");
+  } finally {
+    fixture.cleanup();
+    if (previous === undefined) delete globalThis[marker];
+    else globalThis[marker] = previous;
   }
 });
 

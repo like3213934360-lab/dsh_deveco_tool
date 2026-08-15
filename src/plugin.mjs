@@ -22,7 +22,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { sweepLocalScreenshots, sweepOrphanedAttachments } from "./attachment-gc.mjs";
+import { sweepOnce } from "./attachment-gc.mjs";
 import { runRegisteredScript, scriptsStatus } from "./script-registry.mjs";
 import { setProjectPath } from "./project-context.mjs";
 import { collectDoctorReport } from "./doctor.mjs";
@@ -486,14 +486,15 @@ async function apply(ctx) {
   // 删除未被任何会话引用的附件对象(存在超过 1 小时)与本地超时截图。
   setTimeout(() => {
     const dshHome = process.env.DSH_HOME ?? path.join(os.homedir(), ".dsh");
-    const attachmentStats = sweepOrphanedAttachments(dshHome);
-    const screenshotStats = sweepLocalScreenshots();
+    const swept = sweepOnce(dshHome);
+    if (swept === null) return;   // HMR 重载后的重复调用, 已由 sweepOnce 节流
+    const { attachments, screenshots } = swept;
     // 跳过必须显式说出来: 跳过与"扫完了没有孤儿"都表现为 deleted=0, 但前者意味着
     // 证据不足(会话日志读不出来), 是需要有人去看一眼的状态。
-    const attachmentPart = attachmentStats.skipped === null
-      ? `attachments deleted=${attachmentStats.deleted} keptReferenced=${attachmentStats.keptReferenced} keptRecent=${attachmentStats.keptRecent}`
-      : `attachments skipped(${attachmentStats.skipped})`;
-    console.log(`[dsh-deveco-tool] sweep: ${attachmentPart}; local screenshots deleted=${screenshotStats.deleted}`);
+    const attachmentPart = attachments.skipped === null
+      ? `attachments deleted=${attachments.deleted} keptReferenced=${attachments.keptReferenced} keptRecent=${attachments.keptRecent}`
+      : `attachments skipped(${attachments.skipped})`;
+    console.log(`[dsh-deveco-tool] sweep: ${attachmentPart}; local screenshots deleted=${screenshots.deleted}`);
   }, 0).unref?.();
 
   // 插件卸载时清理长驻子进程(对应原 server 的 SIGTERM 清理)。

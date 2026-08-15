@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -48,23 +49,47 @@ export function resolveSkillsRoot() {
 // 空字符串表示没有任何候选可用 —— scriptPath() 必须挡住它。
 export const SKILLS_ROOT = resolveSkillsRoot().path;
 
+/**
+ * 当前平台上 DevEco Studio 的默认安装位置。
+ *
+ * 按平台分支而不是把三个平台的路径堆在一起: 探测的只是目录是否存在, 混在一起也能跑,
+ * 但 source 就说不清命中的是哪一类默认值了, 而 doctor 要靠它告诉用户"这是猜的还是你
+ * 配的"。三处都只列官方安装器的默认目标, 装到别处的用 DEVECO_HOME 覆盖。
+ *
+ * @returns {string[]} 候选目录, 按优先级排列。
+ */
+function defaultDevecoHomes() {
+  if (process.platform === "darwin") {
+    return ["/Applications/DevEco-Studio.app/Contents", "/Applications/DevEco-Studio.app"];
+  }
+  if (process.platform === "win32") {
+    const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+    return [
+      path.join(programFiles, "Huawei", "DevEco Studio"),
+      path.join(programFiles, "Huawei", "DevEcoStudio"),
+    ];
+  }
+  return [
+    "/opt/deveco-studio",
+    "/usr/local/deveco-studio",
+    path.join(os.homedir(), "deveco-studio"),
+  ];
+}
+
 export function resolveDevecoHome() {
   const configured = process.env.DEVECO_HOME || process.env.DEVECO_PATH;
-  const candidates = [
-    configured,
-    "/Applications/DevEco-Studio.app/Contents",
-    "/Applications/DevEco-Studio.app",
-  ].filter(Boolean);
+  const candidates = [configured, ...defaultDevecoHomes()].filter(Boolean);
 
   for (const candidate of candidates) {
     const absolute = path.resolve(candidate);
+    // .app 是 macOS 的包目录, SDK 与工具链都在 Contents 下; 其他平台的路径不会命中。
     const normalized = absolute.endsWith(".app")
       ? path.join(absolute, "Contents")
       : absolute;
     if (existingDirectory(normalized)) {
       return {
         path: normalized,
-        source: configured ? "environment" : "macOS-default",
+        source: configured ? "environment" : `${process.platform}-default`,
         configured: Boolean(configured),
       };
     }

@@ -62,15 +62,19 @@ HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件**
 
 ### 1. 运行时环境
 
-- **Node.js >= 20**（业务模块与插件入口均基于 Node ESM）
+- **Node.js >= 22.15**（业务模块与插件入口均基于 Node ESM）。下限由 `zlib.zstdDecompressSync` 决定（Node 23.8 引入并回移植至 22.x），附件清扫读取 DSH 的 `.jsonl.zstd` 会话日志需要它；DSH 自身的会话持久化同样依赖该 API，因此宿主环境本就不低于此
 - **DeepSeek Harness (DSH)** 已安装并运行（web profile），插件通过 `cordis.patch.yml` 挂载
 
 ### 2. DevEco Studio（按功能而定）
 
 底层工具链（`hdc`、hvigor 构建、ArkTS SDK 类型库）随 DevEco Studio 一并安装，`config.mjs` 会自动探测：
 
-- **macOS 默认路径**：`/Applications/DevEco-Studio.app/Contents`（免配置）
-- **其他平台**：必须设置环境变量 `DEVECO_HOME` 或 `DEVECO_PATH` 指向 DevEco 安装目录
+- **自动探测的默认安装路径**（装在这些位置即免配置）：
+  - macOS：`/Applications/DevEco-Studio.app/Contents`
+  - Windows：`%ProgramFiles%\Huawei\DevEco Studio`（及 `DevEcoStudio`）
+  - Linux：`/opt/deveco-studio`、`/usr/local/deveco-studio`、`~/deveco-studio`
+- **装在别处**：设置 `DEVECO_HOME` 或 `DEVECO_PATH` 指向安装目录（显式配置优先于探测）
+- Windows / Linux 的默认路径取自官方安装器的默认目标，仅在 macOS 上做过实机验证；如探测不到，用 `DEVECO_HOME` 覆盖，并以 `deveco_doctor` 的 `environment.devecoHomeSource` 确认命中来源
 
 各功能对 DevEco 的依赖：
 
@@ -103,7 +107,7 @@ HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件**
 
 | 变量 | 用途 |
 |---|---|
-| `DEVECO_HOME` / `DEVECO_PATH` | DevEco 安装目录（非 macOS 默认路径时必须设置） |
+| `DEVECO_HOME` / `DEVECO_PATH` | DevEco 安装目录（未装在各平台默认路径时必须设置） |
 | `HDC_PATH` | hdc 可执行文件路径（可选，默认从 DevEco SDK 推导） |
 | `OHOS_SDK_PATH` | ArkTS LSP 的 SDK 路径（可选，默认从 DevEco home 推导） |
 | `PYTHON` | Python 解释器（可选，默认探测 `python3`） |
@@ -289,7 +293,7 @@ node --check src/*.mjs # 语法检查(全部模块)
 ## 已知限制
 
 - skills 资产（19 个脚本 + 其运行时依赖，11 个 skill 约 27M）随仓库分发在 `skills/` 下，开箱即用；只保留脚本运行时真正读取的文件，上游 skill 包中面向 agent 的说明与测试样例不入库；`DEVECO_SKILLS_ROOT` 可覆盖指向仓库外另一份资产。根目录解析结果与每个脚本的落盘状态见 `deveco_doctor` 的 `environment.skillsRoot*` 与 `scripts`（`rootExists` / `missing` / 每项 `exists`）。资产缺失时 `deveco_script` 报 `SKILLS_ROOT_NOT_FOUND`（整个根找不到）或 `SCRIPT_NOT_FOUND`（单个脚本缺失），两者都带 `hint`。
-- 依赖 dev 环境：ArkTS LSP、DevEco CLI、hdc、CodeGenie child 均依赖本机 DevEco Studio 安装（`DEVECO_HOME` / `DEVECO_PATH` 自动探测，可用环境变量覆盖；macOS 默认路径为 `/Applications/DevEco-Studio.app/Contents`，其他平台需设置环境变量）。
+- 依赖 dev 环境：ArkTS LSP、DevEco CLI、hdc、CodeGenie child 均依赖本机 DevEco Studio 安装。三个平台的默认安装路径都会自动探测（见「前提条件」），可用 `DEVECO_HOME` / `DEVECO_PATH` 覆盖；Windows / Linux 路径未做实机验证。
 - Phase 1 输出呈现为 JSON 文本，未启用 DSH 卡片/图片内联。
 
 ---
