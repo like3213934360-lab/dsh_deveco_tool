@@ -7,41 +7,55 @@ import { getProjectPath } from "./project-context.mjs";
 import { terminateProcessTree } from "./process-tree.mjs";
 
 
+// 每条 description 都以一行真实调用签名收尾。这些脚本是外部 CLI, 调用方只能看到
+// 这段文本, 光有一句功能概述会让参数靠猜 —— 实测 arkui_docs_search 连错三次(它要
+// query 子命令, 而 search 是交互式的)。签名逐条对着 --help 或源码的 argv 解析核过。
 const SCRIPT_DEFINITIONS = {
   copy_template: {
     skill: "deveco-create-project",
     file: "scripts/copy-template.mjs",
-    description: "Copy the bundled ArkTS project template and resolve its SDK metadata.",
+    description: "Copy the bundled ArkTS project template and resolve its SDK metadata. "
+      + "Args: --project-path <dir> --app-name <name> [--bundle-name <id>] [--api-level <n>].",
   },
   detect_sdk: {
     skill: "deveco-create-project",
     file: "scripts/detect-sdk.mjs",
-    description: "Detect the API level and SDK metadata from the configured DevEco Studio.",
+    description: "Detect the API level and SDK metadata from the configured DevEco Studio. "
+      + "Takes no arguments; returns apiLevel / sdkVersion / detectedFrom as JSON.",
   },
   collect_hilog: {
     skill: "arkts-runtime-fix",
     file: "scripts/collect-hilog.mjs",
-    description: "Collect a bounded HILOG snapshot from a connected HarmonyOS device.",
+    description: "Collect a bounded HILOG snapshot from a connected HarmonyOS device. "
+      + "Args: --output-dir <dir> (required) [--device-id <id>] [--lines <n>]. "
+      + "Writes a snapshot file and reports its path; feed that path to parse_jscrash_log.",
   },
   fetch_faultlog: {
     skill: "arkts-runtime-fix",
     file: "scripts/fetch-faultlog.mjs",
-    description: "Fetch a named faultlogger file from a connected HarmonyOS device.",
+    description: "Fetch a named faultlogger file from a connected HarmonyOS device. "
+      + "Args: --faultlog-name <name> (required) [--output-dir <dir>] [--device-id <id>]. "
+      + "Use probe_faultlogger first to discover the name.",
   },
   jscrash_report: {
     skill: "arkts-runtime-fix",
     file: "scripts/jscrash-report.mjs",
-    description: "Collect or analyze a JS crash report and produce structured diagnostics.",
+    description: "Collect or analyze a JS crash report and produce structured diagnostics. "
+      + "Args: one of --log-file <path> | --log-text <text>, else collects from the device with "
+      + "[--bundle-name <id>] [--device-id <id>] [--lines <n>] [--process-hint <s>] [--include-text].",
   },
   parse_jscrash_log: {
     skill: "arkts-runtime-fix",
     file: "scripts/parse-jscrash-log.mjs",
-    description: "Parse a JS crash log from a file or inline text.",
+    description: "Parse a JS crash log from a file or inline text. "
+      + "Args: --log-file <path> or --log-text <text>, plus [--source hilog|faultlog|text] "
+      + "[--bundle-name <id>] [--process-hint <s>] [--include-text].",
   },
   probe_faultlogger: {
     skill: "arkts-runtime-fix",
     file: "scripts/probe-faultlogger.mjs",
-    description: "Probe recent faultlogger entries on a connected HarmonyOS device.",
+    description: "Probe recent faultlogger entries on a connected HarmonyOS device. "
+      + "Args: [--bundle-name <id>] [--device-id <id>] [--limit <n>] [--max-age-minutes <n>].",
   },
   search_practices: {
     skill: "arkui-component-best-practices",
@@ -62,61 +76,79 @@ const SCRIPT_DEFINITIONS = {
     skill: "hmos-apifault-analysis",
     runtime: "python",
     file: "references/scripts/hilog_collector.py",
-    description: "Collect and filter device hilog for API fault analysis.",
+    description: "Collect and filter device hilog for API fault analysis. "
+      + "Args: [--output-dir <dir>] [--time-window <s>] [--collect-timeout <s>] "
+      + "[--max-files <n>] [--max-bytes <n>] [--hilogtool <path>].",
   },
   apifault_analyze_media: {
     skill: "hmos-apifault-analysis",
     runtime: "python",
     file: "references/scripts/media_file_analyzer.py",
-    description: "Inspect a media file's container and codec metadata when diagnosing a media API fault.",
+    description: "Inspect a media file's container and codec metadata when diagnosing a media API fault. "
+      + "Args: --file <path> (required) [--json] [--max-read-size <n>].",
   },
   appfreeze_analyze: {
     skill: "hmos-appfreeze-analysis",
     runtime: "python",
     file: "scripts/freeze/main.py",
-    description: "Analyze an appfreeze fault log: binder chains, stack sections, and a structured report.",
+    description: "Analyze an appfreeze fault log: binder chains, stack sections, and a structured report. "
+      + "Args: -p <path-to-fault-log> (required).",
   },
   appfreeze_sample_stack: {
     skill: "hmos-appfreeze-analysis",
     runtime: "python",
     file: "scripts/sample_stack_analyzer.py",
-    description: "Analyze a sampled stack trace collected during an appfreeze.",
+    description: "Analyze a sampled stack trace collected during an appfreeze. "
+      + "Takes one positional path, so pass argv (e.g. [\"/path/to/sample_stack.txt\"]); "
+      + "it has no flags and no --help.",
   },
   arkts_docs_search: {
     skill: "hmos-arkts-knowledge-retriever",
     runtime: "python",
     file: "scripts/search_docs.py",
-    description: "Search the bundled ArkTS documentation index shipped with this skill.",
+    description: "Search the bundled ArkTS documentation index (offline; no login needed, unlike "
+      + "arkts_knowledge_search). Args: --query <text> (required) [--limit <n>].",
   },
   arkui_docs_search: {
     skill: "hmos-arkui-knowledge-retriever",
     runtime: "python",
     file: "scripts/run.py",
-    description: "Query the bundled ArkUI knowledge base for API usage, parameters, and version support.",
+    description: "Query the bundled ArkUI knowledge base for API usage, parameters, and version support "
+      + "(offline). Needs the `query` subcommand with a positional query, so pass argv (e.g. "
+      + "[\"query\", \"Swiper 轮播\", \"--top-k\", \"3\"]); optional [--domain ndk|arkts|both] "
+      + "[--format json|text] [--include-code] [--full-content]. The `search` subcommand is "
+      + "interactive and takes no query — it will not work through this tool.",
   },
   arkui_docs_rebuild_index: {
     skill: "hmos-arkui-knowledge-retriever",
     runtime: "python",
     file: "scripts/rebuild_index.py",
-    description: "Rebuild the ArkUI knowledge base index after its documents change.",
+    description: "Rebuild the ArkUI knowledge base index after its documents change. "
+      + "Args: [--kb <dir>] [--dry-run].",
   },
   instrument_test_run: {
     skill: "hmos-instrument-test",
     runtime: "python",
     file: "scripts/run_instrument_test.py",
-    description: "Run instrumented (on-device) tests for a HarmonyOS module and report the results.",
+    description: "Run instrumented (on-device) tests for a HarmonyOS module and report the results. "
+      + "Args: --project-path <dir> (required) [--module <name>] [--scope <spec>] "
+      + "[--coverage|--no-coverage] [--asan] [--timeout <s>].",
   },
   local_test_run: {
     skill: "hmos-local-test",
     runtime: "python",
     file: "scripts/run_local_test.py",
-    description: "Run local (host-side) unit tests for a HarmonyOS module and report the results.",
+    description: "Run local (host-side) unit tests for a HarmonyOS module and report the results. "
+      + "Args: --project-path <dir> (required) [--module <name>] [--scope <spec>] "
+      + "[--coverage|--no-coverage] [--timeout <s>].",
   },
   memleak_analyze: {
     skill: "hmos-memleak-analysis",
     runtime: "python",
     file: "scripts/skill_main.py",
-    description: "Analyze an ArkTS heap snapshot for leak suspects and risky retain paths.",
+    description: "Scan source for memory-leak suspects and risky alloc/release pairings. "
+      + "Takes a positional code path, so pass argv (e.g. [\"entry/src/main\", \"--language\", "
+      + "\"arkts\", \"--json\"]); optional [--language js|arkts|cpp|c|all] [--output <file>].",
   },
 };
 
