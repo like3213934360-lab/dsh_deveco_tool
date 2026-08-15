@@ -488,8 +488,13 @@ async function apply(ctx) {
     const dshHome = process.env.DSH_HOME ?? path.join(os.homedir(), ".dsh");
     const attachmentStats = sweepOrphanedAttachments(dshHome);
     const screenshotStats = sweepLocalScreenshots();
-    console.log(`[dsh-deveco-tool] sweep: attachments deleted=${attachmentStats.deleted} keptReferenced=${attachmentStats.keptReferenced} keptRecent=${attachmentStats.keptRecent}; local screenshots deleted=${screenshotStats.deleted}`);
-  }, 0);
+    // 跳过必须显式说出来: 跳过与"扫完了没有孤儿"都表现为 deleted=0, 但前者意味着
+    // 证据不足(会话日志读不出来), 是需要有人去看一眼的状态。
+    const attachmentPart = attachmentStats.skipped === null
+      ? `attachments deleted=${attachmentStats.deleted} keptReferenced=${attachmentStats.keptReferenced} keptRecent=${attachmentStats.keptRecent}`
+      : `attachments skipped(${attachmentStats.skipped})`;
+    console.log(`[dsh-deveco-tool] sweep: ${attachmentPart}; local screenshots deleted=${screenshotStats.deleted}`);
+  }, 0).unref?.();
 
   // 插件卸载时清理长驻子进程(对应原 server 的 SIGTERM 清理)。
   ctx.on("dispose", () => {

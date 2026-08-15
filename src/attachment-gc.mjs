@@ -17,7 +17,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { zstdDecompressSync } from "node:zlib";
+import zlib from "node:zlib";
+
+// 具名导入 zstdDecompressSync 会让整个插件在缺该 API 的 Node 上加载失败:
+// ESM 具名导入是静态校验的, 内建模块少一个导出就抛 SyntaxError, 而 plugin.mjs
+// 静态 import 本模块。zstdDecompressSync 是 Node 23.8 引入并回移植到 22.x 的,
+// 低于此的 Node(package.json 的下限是 20)会直接让插件起不来。改为运行时探测,
+// 缺失时放弃清扫而不是让插件失败, 也不是把压缩会话当成"没有引用"。
+const zstdDecompressSync = typeof zlib.zstdDecompressSync === "function"
+  ? zlib.zstdDecompressSync
+  : null;
 
 /** 附件对象文件名: 64 位 sha256 十六进制。 */
 const OBJECT_NAME_PATTERN = /^[a-f0-9]{64}$/;
@@ -27,72 +36,97 @@ const REF_PATTERN = /sha256:([a-f0-9]{64})/g;
 const SWEEP_MIN_AGE_MS = 60 * 60 * 1000;
 
 /**
- * 读取一个会话日志文件的文本(zstd 或明文),失败返回 null。
+ * 读取一个会话日志文件的文本(zstd 或明文)。
+ *
+ * 抛出而不是返回 null: 调用方必须能区分"这个会话没有引用"和"这个会话读不出来"。
+ * 两者在原实现里都表现为引用集里少了条目, 而后果是删掉别人还在用的附件。
+ *
  * @param {string} logFile 会话日志文件路径
- * @returns {string|null} 日志文本,读取/解压失败时为 null
+ * @returns {string} 日志文本
+ * @throws {Error} 读取或解压失败, 以及需要 zstd 但当前 Node 不支持
  */
 function readSessionLog(logFile) {
-  try {
-    if (logFile.endsWith(".zstd")) {
-      return zstdDecompressSync(fs.readFileSync(logFile)).toString("utf8");
+  if (logFile.endsWith(".zstd")) {
+    if (zstdDecompressSync === null) {
+      throw new Error("当前 Node 没有 zlib.zstdDecompressSync(需要 22.15+/23.8+), 无法读取压缩会话日志");
     }
-    return fs.readFileSync(logFile, "utf8");
-  } catch (error) {
-    console.warn(`[dsh-deveco-tool] attachment GC: cannot read session log ${logFile}: ${error.message}`);
-    return null;
+    return zstdDecompressSync(fs.readFileSync(logFile)).toString("utf8");
   }
+  return fs.readFileSync(logFile, "utf8");
 }
 
 /**
  * 收集 DSH_HOME/sessions 下所有会话日志里出现的附件 sha256 引用。
+ *
+ * 这份引用集是删除的唯一依据, 所以它必须是完整的或者被明确标记为不完整。
+ * 任何一个会话日志读不出来, 就报告 complete:false —— 调用方据此整轮放弃, 因为
+ * "扫不到引用"与"确实没有引用"在结果上无法区分, 而按后者行动会删掉别人在用的附件。
+ *
  * @param {string} sessionsRoot 会话根目录
- * @returns {Set<string>} 被引用的 sha256 集合
+ * @returns {{referenced: Set<string>, complete: boolean, reason: string|null}} 引用集与其可信度
  */
 function collectReferencedHashes(sessionsRoot) {
   const referenced = new Set();
   let workspaces;
   try {
     workspaces = fs.readdirSync(sessionsRoot);
-  } catch {
-    return referenced;
+  } catch (error) {
+    return { referenced, complete: false, reason: `无法读取会话目录 ${sessionsRoot}: ${error.message}` };
   }
   for (const workspace of workspaces) {
     const workspaceDir = path.join(sessionsRoot, workspace);
     let sessions;
     try {
       sessions = fs.readdirSync(workspaceDir);
-    } catch {
-      continue;
+    } catch (error) {
+      // ENOTDIR 是正常的: sessions/ 下可能有非目录条目。其余(如 EACCES)意味着
+      // 这里可能藏着读不到的引用, 必须让整轮清扫失效。
+      if (error.code === "ENOTDIR") continue;
+      return { referenced, complete: false, reason: `无法读取 ${workspaceDir}: ${error.message}` };
     }
     for (const session of sessions) {
       const sessionDir = path.join(workspaceDir, session);
       try {
         if (!fs.statSync(sessionDir).isDirectory()) continue;
-      } catch {
-        continue;
+      } catch (error) {
+        return { referenced, complete: false, reason: `无法 stat ${sessionDir}: ${error.message}` };
       }
+      // 两个候选都扫: 原实现读到 .zstd 就 break, 一旦某个会话同时留有压缩归档和
+      // 未压缩的新片段, 后者里的引用就被漏掉了。
       for (const candidate of ["session.jsonl.zstd", "session.jsonl"]) {
         const logFile = path.join(sessionDir, candidate);
         if (!fs.existsSync(logFile)) continue;
-        const text = readSessionLog(logFile);
-        if (text === null) continue;
+        let text;
+        try {
+          text = readSessionLog(logFile);
+        } catch (error) {
+          return { referenced, complete: false, reason: `无法读取会话日志 ${logFile}: ${error.message}` };
+        }
         for (const match of text.matchAll(REF_PATTERN)) {
           referenced.add(match[1]);
         }
-        break;
       }
     }
   }
-  return referenced;
+  return { referenced, complete: true, reason: null };
 }
 
 /**
  * 清扫未被任何会话引用、且存在超过 SWEEP_MIN_AGE_MS 的附件对象。
+ *
+ * 删除的是 DSH 全局附件库, 里面混着其他插件与用户自己的附件, 内容寻址不带来源标记,
+ * 无法只挑本插件产生的那些。因此这里对"证据不足"一律不动手, 并可用
+ * DEVECO_ATTACHMENT_GC=0 整体关闭。
+ *
  * @param {string} dshHome DSH_HOME 根目录
- * @returns {{deleted: number, keptReferenced: number, keptRecent: number}} 清扫统计
+ * @returns {{deleted: number, keptReferenced: number, keptRecent: number, skipped: string|null}} 清扫统计
  */
 function sweepOrphanedAttachments(dshHome) {
-  const stats = { deleted: 0, keptReferenced: 0, keptRecent: 0 };
+  const stats = { deleted: 0, keptReferenced: 0, keptRecent: 0, skipped: null };
+  if (process.env.DEVECO_ATTACHMENT_GC === "0") {
+    stats.skipped = "DEVECO_ATTACHMENT_GC=0";
+    return stats;
+  }
   const objectsRoot = path.join(dshHome, "attachments", "v1", "objects");
   let buckets;
   try {
@@ -100,7 +134,12 @@ function sweepOrphanedAttachments(dshHome) {
   } catch {
     return stats;
   }
-  const referenced = collectReferencedHashes(path.join(dshHome, "sessions"));
+  const { referenced, complete, reason } = collectReferencedHashes(path.join(dshHome, "sessions"));
+  if (!complete) {
+    // 引用集不完整时删除等于拿别人的数据赌一把, 放弃这一轮才是对的。
+    stats.skipped = reason;
+    return stats;
+  }
   const now = Date.now();
   for (const bucket of buckets) {
     const bucketDir = path.join(objectsRoot, bucket);

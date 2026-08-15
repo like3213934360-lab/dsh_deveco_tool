@@ -8,8 +8,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { apply } from "./src/plugin.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import zlib from "node:zlib";
 import { resolveSkillsRoot } from "./src/config.mjs";
 import { runRegisteredScript, scriptsStatus } from "./src/script-registry.mjs";
+import { sweepOrphanedAttachments } from "./src/attachment-gc.mjs";
 
 function makeFakeCtx() {
   const registered = [];
@@ -159,4 +164,78 @@ test("unknown script id is rejected before any spawn", async () => {
     () => runRegisteredScript("no_such_script", {}),
     (error) => error.code === "UNKNOWN_SCRIPT",
   );
+});
+
+// 附件 GC 删的是 DSH 全局附件库(内容寻址, 不带来源标记, 混着其他插件和用户自己的
+// 附件), 唯一的护栏就是引用集是否可信。这三条把该护栏钉死: 证据不足不动手、
+// 证据完整才删孤儿、压缩会话里的引用同样算引用。
+function makeGcFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deveco-gc-"));
+  const stale = new Date("2020-01-01T00:00:00Z");
+  const writeObject = (hash, body) => {
+    const dir = path.join(root, "attachments", "v1", "objects", hash.slice(0, 2));
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, hash);
+    fs.writeFileSync(file, body);
+    fs.utimesSync(file, stale, stale);   // 跨过 1 小时的年龄门槛
+    return file;
+  };
+  return { root, writeObject, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+const HASH_A = "a".repeat(64);
+const HASH_B = "b".repeat(64);
+
+test("attachment GC refuses to delete when the reference set is incomplete", () => {
+  const fixture = makeGcFixture();
+  try {
+    const object = fixture.writeObject(HASH_A, "orphan");
+    // sessions/ 不存在 => 读不到任何引用。原实现会把这当成"没有引用"并删光。
+    const stats = sweepOrphanedAttachments(fixture.root);
+    assert.equal(stats.deleted, 0);
+    assert.ok(stats.skipped, "证据不足时必须报告 skipped 而不是静默删除");
+    assert.ok(fs.existsSync(object), "证据不足时附件必须原样保留");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("attachment GC deletes orphans once the reference set is complete", () => {
+  const fixture = makeGcFixture();
+  try {
+    const object = fixture.writeObject(HASH_A, "orphan");
+    const sessionDir = path.join(fixture.root, "sessions", "ws", "session-1");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, "session.jsonl"), '{"role":"user"}\n');
+    const stats = sweepOrphanedAttachments(fixture.root);
+    assert.equal(stats.skipped, null);
+    assert.equal(stats.deleted, 1);
+    assert.equal(fs.existsSync(object), false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("attachment GC honours references inside zstd session logs", (t) => {
+  if (typeof zlib.zstdDecompressSync !== "function") {
+    t.skip("当前 Node 无 zstd 支持");
+    return;
+  }
+  const fixture = makeGcFixture();
+  try {
+    const referenced = fixture.writeObject(HASH_B, "referenced");
+    const sessionDir = path.join(fixture.root, "sessions", "ws", "session-1");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionDir, "session.jsonl.zstd"),
+      zlib.zstdCompressSync(Buffer.from(`${JSON.stringify({ img: `sha256:${HASH_B}` })}\n`)),
+    );
+    const stats = sweepOrphanedAttachments(fixture.root);
+    assert.equal(stats.skipped, null);
+    assert.equal(stats.keptReferenced, 1);
+    assert.equal(stats.deleted, 0);
+    assert.ok(fs.existsSync(referenced));
+  } finally {
+    fixture.cleanup();
+  }
 });

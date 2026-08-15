@@ -108,6 +108,7 @@ HarmonyOS / DevEco 诊断工具集，以 **DeepSeek Harness (DSH) 原生插件**
 | `OHOS_SDK_PATH` | ArkTS LSP 的 SDK 路径（可选，默认从 DevEco home 推导） |
 | `PYTHON` | Python 解释器（可选，默认探测 `python3`） |
 | `DEVECO_SKILLS_ROOT` | skills 资产根目录（可选，默认用仓库内 `skills/`；设置后即为权威，指向无效目录时不回落） |
+| `DEVECO_ATTACHMENT_GC` | 设为 `0` 关闭启动时的 DSH 附件库清扫（可选，默认开启） |
 | `DEVECO_CODEGENIE_ENTRY` | CodeGenie 子进程入口（测试用，可选） |
 
 ---
